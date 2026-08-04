@@ -15,6 +15,8 @@ require_relative "agent_sessions/adapters/codex"
 require_relative "agent_sessions/adapters/pi"
 require_relative "agent_sessions/adapters/amp"
 require_relative "agent_sessions/adapters/opencode"
+require_relative "agent_sessions/adapters/cursor"
+require_relative "agent_sessions/adapters/cursor_ide"
 
 module AgentSessions
   class << self
@@ -60,3 +62,5 @@ AgentSessions.register(AgentSessions::Adapters::Codex)
 AgentSessions.register(AgentSessions::Adapters::Pi)
 AgentSessions.register(AgentSessions::Adapters::Amp)
 AgentSessions.register(AgentSessions::Adapters::Opencode)
+AgentSessions.register(AgentSessions::Adapters::Cursor)
+AgentSessions.register(AgentSessions::Adapters::CursorIde)

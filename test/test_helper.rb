@@ -8,6 +8,8 @@ require "tmpdir"
 require "fileutils"
 require "stringio"
 
+require_relative "support/fake_adapter"
+
 module FixtureHelpers
   # Yields a throwaway HOME and an env hash pointing at it.
   # All Layer 1 tests resolve paths against this fake home, never the real one.

@@ -9,6 +9,7 @@ require_relative "agent_sessions/env_override"
 require_relative "agent_sessions/location"
 require_relative "agent_sessions/store"
 require_relative "agent_sessions/check"
+require_relative "agent_sessions/adapters/base"
 
 module AgentSessions
 end

@@ -25,7 +25,7 @@ module AgentSessions
     # Catches UnknownAgent for a typo'd agent, and the declaration errors an
     # adapter raises when it is misconfigured. Layer 1 never raises for disk
     # state, so anything arriving here is worth one clean line, not a backtrace.
-    rescue AgentSessions::Error => e
+    rescue AgentSessions::Error, OptionParser::ParseError => e
       @stderr.puts e.message
       1
     end
@@ -71,12 +71,7 @@ module AgentSessions
       if json
         emit_json(findings)
       else
-        at_risk = findings.select { |f| f.synced_to.any? }.sum(&:bytes)
-        findings.each do |finding|
-          risk = finding.synced_to.any? ? "  SYNCED: #{finding.synced_to.join(", ")}" : ""
-          @stdout.puts "#{finding.agent}/#{finding.kind}  #{human_bytes(finding.bytes)}  #{finding.path}#{risk}"
-        end
-        @stdout.puts "#{human_bytes(at_risk)} in synced locations"
+        print_audit(findings)
       end
       0
     end
@@ -126,6 +121,20 @@ module AgentSessions
       @stdout.puts
     end
 
+    def print_audit(findings)
+      rows = findings.map { |finding| ["#{finding.agent}/#{finding.kind}", human_bytes(finding.bytes), finding] }
+      label_width = rows.map { |label, _, _| label.length }.max || 0
+      size_width = rows.map { |_, size, _| size.length }.max || 0
+
+      rows.each do |label, size, finding|
+        risk = finding.synced_to.any? ? "  SYNCED: #{finding.synced_to.join(", ")}" : ""
+        @stdout.puts "#{label.ljust(label_width)}  #{size.rjust(size_width)}  #{finding.path}#{risk}"
+      end
+
+      at_risk = findings.select { |f| f.synced_to.any? }.sum(&:bytes)
+      @stdout.puts "#{human_bytes(at_risk)} in synced locations"
+    end
+
     def emit_json(records)
       @stdout.puts JSON.pretty_generate(records.map { |record| jsonable(record.to_h) })
     end
@@ -144,6 +153,8 @@ module AgentSessions
       return "0 B" if bytes.zero?
 
       exp = (Math.log(bytes) / Math.log(1024)).floor.clamp(0, 4)
+      return "#{bytes} B" if exp.zero?
+
       format("%.1f %s", bytes.to_f / (1024**exp), %w[B KB MB GB TB][exp])
     end
   end

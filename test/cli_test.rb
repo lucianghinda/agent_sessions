@@ -91,4 +91,31 @@ class CLITest < Minitest::Test
       assert_includes out, AgentSessions::VERSION
     end
   end
+
+  def test_unknown_flag_reports_cleanly
+    with_home do |_home, env|
+      status, _, err = run_cli("where", "--bogus", env: env)
+      assert_equal 1, status
+      assert_includes err, "invalid option"
+    end
+  end
+
+  def test_byte_scale_sizes_have_no_decimal
+    with_home do |home, env|
+      write("x" * 814, home, ".claude", "projects", "-p", "s.jsonl")
+      _, out, = run_cli("audit", env: env)
+      assert_includes out, "814 B"
+      refute_includes out, "814.0 B"
+    end
+  end
+
+  def test_audit_aligns_columns
+    with_home do |home, env|
+      write("x" * 5, home, ".claude", "projects", "-p", "s.jsonl")
+      write("x" * 500_000, home, ".claude", "history.jsonl")
+      _, out, = run_cli("audit", env: env)
+      offsets = out.lines.filter_map { |line| line.index(home) }
+      assert_equal 1, offsets.uniq.size, out
+    end
+  end
 end

@@ -63,4 +63,38 @@ class AdapterBaseTest < Minitest::Test
     refute_respond_to AgentSessions::Adapters::Base, :store
     refute_respond_to AgentSessions::Adapters::Base, :base_dir
   end
+
+  def test_tilde_user_paths_stay_literal
+    store = FakeAdapter.new(env: { "HOME" => "/h", "FAKE_HOME" => "~root" }).locate
+    assert_equal "~root/sessions", store.effective.path
+  end
+
+  def test_store_requires_exactly_one_of_dir_or_path
+    missing = assert_raises(ArgumentError) do
+      Class.new(AgentSessions::Adapters::Base) { store :bad, format: :jsonl }
+    end
+    assert_includes missing.message, "dir:"
+
+    assert_raises(ArgumentError) do
+      Class.new(AgentSessions::Adapters::Base) { store :bad, dir: "d", path: "p.jsonl", format: :jsonl }
+    end
+  end
+
+  def test_adapter_without_stores_names_what_is_missing
+    adapter = Class.new(AgentSessions::Adapters::Base) do
+      agent :bare
+      base_dir default: "~/.bare"
+    end
+    error = assert_raises(AgentSessions::Error) { adapter.new(env: { "HOME" => "/h" }).locate }
+    assert_includes error.message, "store"
+  end
+
+  def test_adapter_without_base_dir_names_what_is_missing
+    adapter = Class.new(AgentSessions::Adapters::Base) do
+      agent :bare
+      store :sessions, dir: "s", format: :jsonl
+    end
+    error = assert_raises(AgentSessions::Error) { adapter.new(env: { "HOME" => "/h" }).locate }
+    assert_includes error.message, "base_dir"
+  end
 end

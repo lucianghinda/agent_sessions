@@ -2,10 +2,24 @@
 
 module AgentSessions
   module Adapters
+    # Base class for every agent adapter. Subclass this directly, never another
+    # adapter: the DSL keeps its configuration in singleton instance variables,
+    # which Ruby does not carry down a second level of inheritance, so a subclass
+    # of a subclass would silently declare nothing.
+    #
+    # An instance memoizes what it resolves. Build a new instance per resolution
+    # rather than reusing one across changes to the env hash.
     class Base
       class << self
-        attr_reader :agent_name, :label_text, :documented_value, :verified_on_date,
-                    :base_dir_config, :store_configs, :declared_warnings
+        attr_reader :agent_name, :label_text, :documented_value, :verified_on_date, :declared_warnings
+
+        def base_dir_config
+          @base_dir_config || raise(Error, "#{inspect} declares no base_dir")
+        end
+
+        def store_configs
+          @store_configs || raise(Error, "#{inspect} declares no store")
+        end
 
         private
 
@@ -19,6 +33,8 @@ module AgentSessions
         end
 
         def store(kind, format:, dir: nil, path: nil, glob: nil, env: nil, optional: false)
+          raise ArgumentError, "store #{kind.inspect} needs exactly one of dir: or path:" if [dir, path].compact.size != 1
+
           @store_configs ||= []
           @store_configs << {
             kind: kind, format: format, dir: dir, path: path,
@@ -85,10 +101,16 @@ module AgentSessions
         names.compact.uniq.map { |name| EnvOverride.new(name: name, value: presence(@env[name])) }
       end
 
-      # ~ expands against the injected env, never the process environment,
-      # so callers can resolve paths for a machine that is not their own.
+      # ~ expands against the injected env, never the process environment, so callers
+      # can resolve paths for a machine that is not their own. A ~user form has no
+      # answer in an injected environment, so it stays literal instead of resolving
+      # against this machine's password database.
       def expand(path)
-        File.expand_path(path.sub(/\A~(?=\/|\z)/) { @env["HOME"] || Dir.home })
+        case path
+        when %r{\A~(/|\z)} then File.expand_path(path.sub(%r{\A~}) { @env["HOME"] || Dir.home })
+        when /\A~/ then path
+        else File.expand_path(path)
+        end
       end
 
       def presence(value)
@@ -104,8 +126,8 @@ module AgentSessions
       end
 
       def read_json(path)
-        File.exist?(path) ? JSON.parse(File.read(path)) : {}
-      rescue JSON::ParserError
+        JSON.parse(File.read(path))
+      rescue Errno::ENOENT, Errno::EACCES, Errno::EISDIR, JSON::ParserError
         {}
       end
     end

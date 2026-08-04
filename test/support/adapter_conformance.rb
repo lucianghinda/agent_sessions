@@ -32,6 +32,8 @@ module AdapterConformance
   end
 
   def test_conformance_env_override_wins
+    skip "#{adapter_class.agent_name} declares no verified env override" if override_env.nil?
+
     with_home do |_home, env|
       store = adapter_class.new(env: env.merge(override_env)).locate
       assert_equal expected_override_path, store.effective.path
@@ -46,10 +48,8 @@ module AdapterConformance
   end
 
   def test_conformance_instances_do_not_share_state
-    with_home do |_home, env|
-      default_path = adapter_class.new(env: env).locate.effective.path
-      overridden = adapter_class.new(env: env.merge(override_env)).locate.effective.path
-      refute_equal default_path, overridden
-    end
+    first = adapter_class.new(env: { "HOME" => "/home-one" }).locate.effective.path
+    second = adapter_class.new(env: { "HOME" => "/home-two" }).locate.effective.path
+    refute_equal first, second
   end
 end

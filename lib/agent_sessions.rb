@@ -11,6 +11,8 @@ require_relative "agent_sessions/store"
 require_relative "agent_sessions/check"
 require_relative "agent_sessions/adapters/base"
 require_relative "agent_sessions/adapters/claude"
+require_relative "agent_sessions/adapters/codex"
+require_relative "agent_sessions/adapters/pi"
 
 module AgentSessions
   class << self
@@ -52,3 +54,5 @@ module AgentSessions
 end
 
 AgentSessions.register(AgentSessions::Adapters::Claude)
+AgentSessions.register(AgentSessions::Adapters::Codex)
+AgentSessions.register(AgentSessions::Adapters::Pi)

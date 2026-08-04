@@ -13,6 +13,8 @@ require_relative "agent_sessions/adapters/base"
 require_relative "agent_sessions/adapters/claude"
 require_relative "agent_sessions/adapters/codex"
 require_relative "agent_sessions/adapters/pi"
+require_relative "agent_sessions/adapters/amp"
+require_relative "agent_sessions/adapters/opencode"
 
 module AgentSessions
   class << self
@@ -56,3 +58,5 @@ end
 AgentSessions.register(AgentSessions::Adapters::Claude)
 AgentSessions.register(AgentSessions::Adapters::Codex)
 AgentSessions.register(AgentSessions::Adapters::Pi)
+AgentSessions.register(AgentSessions::Adapters::Amp)
+AgentSessions.register(AgentSessions::Adapters::Opencode)

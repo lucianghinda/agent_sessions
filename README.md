@@ -24,7 +24,7 @@ agent-sessions doctor
 agent-sessions audit
 ```
 
-Add `--json` to any command for machine-readable output.
+Add `--json` to `where`, `doctor`, or `audit` for machine-readable output.
 
 ## Ruby API
 

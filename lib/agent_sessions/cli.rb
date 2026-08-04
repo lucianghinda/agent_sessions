@@ -14,13 +14,16 @@ module AgentSessions
     end
 
     def run
-      case @argv.shift
+      command = @argv.shift
+      case command
       when "where" then where
       when "doctor" then doctor
       when "audit" then audit
       when "version", "--version", "-v" then version
       when nil, "help", "--help", "-h" then help(@stdout, 0)
-      else help(@stderr, 1)
+      else
+        @stderr.puts "unknown command: #{command}"
+        help(@stderr, 1)
       end
     # Catches UnknownAgent for a typo'd agent, and the declaration errors an
     # adapter raises when it is misconfigured. Layer 1 never raises for disk
@@ -92,7 +95,7 @@ module AgentSessions
           version          print version
 
         Options:
-          --json           machine-readable output (every command)
+          --json           machine-readable output (where, doctor, audit)
       USAGE
       status
     end

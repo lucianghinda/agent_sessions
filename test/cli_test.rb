@@ -54,6 +54,7 @@ class CLITest < Minitest::Test
     with_home do |_home, env|
       status, _, err = run_cli("frobnicate", env: env)
       assert_equal 1, status
+      assert_includes err, "unknown command: frobnicate"
       assert_includes err, "Usage"
     end
   end

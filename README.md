@@ -1,39 +1,68 @@
-# AgentSessions
+# agent_sessions
 
-TODO: Delete this and the text below, and describe your gem
+Where do AI coding agents store their session logs? This gem knows.
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/agent_sessions`. To experiment with that code, run `bin/console` for an interactive prompt.
+Resolves session store paths for Claude Code, Codex CLI, Cursor (CLI and IDE), Amp CLI, opencode, and pi. Verifies those paths against disk. Audits whether plaintext transcripts sit inside anything that syncs.
+
+Read-only by design. Zero runtime dependencies.
+
+Supported agents were last verified on **2026-07-21**. Five of these seven layouts are undocumented, or only partly documented, by their vendors and can move in any release — run `agent-sessions doctor` to check yours.
 
 ## Installation
 
-TODO: Replace `UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG` with your gem name right after releasing it to RubyGems.org. Please do not do it earlier due to security reasons. Alternatively, replace this section with instructions to install your gem from git if you don't plan to release to RubyGems.org.
+Add to your Gemfile:
 
-Install the gem and add to the application's Gemfile by executing:
-
-```bash
-bundle add UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG
+```ruby
+gem "agent_sessions"
 ```
 
-If bundler is not being used to manage dependencies, install the gem by executing:
+## Quick start
 
-```bash
-gem install UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG
+```sh
+agent-sessions where
+agent-sessions doctor
+agent-sessions audit
 ```
 
-## Usage
+Add `--json` to any command for machine-readable output.
 
-TODO: Write usage instructions here
+## Ruby API
 
-## Development
+```ruby
+store = AgentSessions.locate(:codex)
+store.effective.path   # => "/Users/you/.codex/sessions"
+store.format           # => :jsonl
+store.documented?      # => false
+store.retention        # => nil ("grows forever")
+```
 
-After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake test` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.
+List agents:
 
-To install this gem onto your local machine, run `bundle exec rake install`. To release a new version, update the version number in `version.rb`, and then run `bundle exec rake release`, which will create a git tag for the version, push git commits and the created tag, and push the `.gem` file to [rubygems.org](https://rubygems.org).
+```ruby
+AgentSessions.all        # every supported agent
+AgentSessions.installed  # only agents present on this machine
+```
 
-## Contributing
+Verify claims against disk:
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/[USERNAME]/agent_sessions.
+```ruby
+AgentSessions.verify(:codex)
+# => [#<Check status: :pass, claim: "store sessions exists", ...>]
+```
 
-## License
+Resolve for an environment that is not your own:
 
-The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
+```ruby
+AgentSessions.locate(:codex, env: { "CODEX_HOME" => "/tmp/x" })
+```
+
+## Roadmap
+
+- 0.2: enumerate sessions, map them to projects (`list`, `du`)
+- 0.3: read and normalize messages for the file-based agents
+- 0.4: SQLite readers (opencode, Cursor) via optional `sqlite3`
+- 0.5: `export` with secret redaction
+
+## History
+
+View the [changelog](CHANGELOG.md).

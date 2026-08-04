@@ -49,4 +49,19 @@ class AuditTest < Minitest::Test
       assert_equal 42, history.bytes
     end
   end
+
+  def test_layer_one_is_read_only
+    with_home do |home, env|
+      touch(home, ".claude", "projects", "-p", "s.jsonl")
+      FileUtils.chmod_R(0o555, home)
+      begin
+        assert_equal AgentSessions.agents.size, AgentSessions.all(env: env).size
+        refute_empty AgentSessions.verify(env: env)
+        refute_empty AgentSessions.doctor(env: env)
+        refute_empty AgentSessions.audit(env: env)
+      ensure
+        FileUtils.chmod_R(0o755, home)
+      end
+    end
+  end
 end

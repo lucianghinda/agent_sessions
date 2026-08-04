@@ -19,6 +19,8 @@ require_relative "agent_sessions/adapters/cursor"
 require_relative "agent_sessions/adapters/cursor_ide"
 
 module AgentSessions
+  STALE_AFTER_DAYS = 90
+
   class << self
     # Re-registering a name deliberately replaces it, so a consumer can ship a
     # corrected adapter for an agent whose layout moved before the gem catches up.
@@ -45,6 +47,26 @@ module AgentSessions
 
     def installed(env: ENV)
       all(env: env).select(&:installed?)
+    end
+
+    def verify(agent = nil, env: ENV)
+      targets = agent ? [adapter_for(agent)] : registry.values
+      targets.flat_map { |klass| klass.new(env: env).verify }
+    end
+
+    def doctor(agent = nil, env: ENV, today: Date.today)
+      targets = agent ? [adapter_for(agent)] : registry.values
+      staleness = targets.map do |klass|
+        age = (today - klass.verified_on_date).to_i
+        if age > STALE_AFTER_DAYS
+          Check.new(agent: klass.agent_name, status: :drift, claim: "verified within #{STALE_AFTER_DAYS} days",
+                    detail: "last verified #{klass.verified_on_date} (#{age} days ago)")
+        else
+          Check.new(agent: klass.agent_name, status: :pass, claim: "verified within #{STALE_AFTER_DAYS} days",
+                    detail: "last verified #{klass.verified_on_date}")
+        end
+      end
+      verify(agent, env: env) + staleness
     end
 
     private

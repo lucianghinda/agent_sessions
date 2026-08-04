@@ -67,6 +67,24 @@ module AgentSessions
         )
       end
 
+      def verify
+        unless Dir.exist?(base_dir)
+          return [check(:skip, "agent is installed", "#{base_dir} does not exist")]
+        end
+
+        self.class.store_configs.map do |config|
+          location = resolve(config)
+          claim = "store #{config[:kind]} exists"
+          if location.exists?
+            check(:pass, claim, detail_for(location))
+          elsif config[:optional]
+            check(:drift, claim, "#{location.path} not found (optional; undocumented layouts drift)")
+          else
+            check(:fail, claim, "#{location.path} not found")
+          end
+        end
+      end
+
       def base_dir
         config = self.class.base_dir_config
         override = presence(config[:env] && @env[config[:env]])
@@ -123,6 +141,13 @@ module AgentSessions
 
       def check(status, claim, detail)
         Check.new(agent: self.class.agent_name, status: status, claim: claim, detail: detail)
+      end
+
+      def detail_for(location)
+        return location.path unless location.glob
+
+        count = location.matches.size
+        "#{location.path} (#{count} file#{"s" unless count == 1})"
       end
 
       def read_json(path)

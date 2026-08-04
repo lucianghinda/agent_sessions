@@ -17,6 +17,7 @@ require_relative "agent_sessions/adapters/amp"
 require_relative "agent_sessions/adapters/opencode"
 require_relative "agent_sessions/adapters/cursor"
 require_relative "agent_sessions/adapters/cursor_ide"
+require_relative "agent_sessions/audit"
 
 module AgentSessions
   STALE_AFTER_DAYS = 90
@@ -67,6 +68,10 @@ module AgentSessions
         end
       end
       verify(agent, env: env) + staleness
+    end
+
+    def audit(env: ENV)
+      Audit.new(all(env: env), env: env).report
     end
 
     private

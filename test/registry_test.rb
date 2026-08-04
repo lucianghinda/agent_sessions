@@ -46,4 +46,10 @@ class RegistryTest < Minitest::Test
       refute_includes AgentSessions.installed(env: env).map(&:agent), :fake
     end
   end
+
+  def test_register_rejects_an_adapter_without_an_agent_name
+    anonymous = Class.new(AgentSessions::Adapters::Base)
+    error = assert_raises(AgentSessions::Error) { AgentSessions.register(anonymous) }
+    assert_includes error.message, "agent name"
+  end
 end

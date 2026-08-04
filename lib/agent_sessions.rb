@@ -13,8 +13,13 @@ require_relative "agent_sessions/adapters/base"
 
 module AgentSessions
   class << self
+    # Re-registering a name deliberately replaces it, so a consumer can ship a
+    # corrected adapter for an agent whose layout moved before the gem catches up.
     def register(adapter_class)
-      registry[adapter_class.agent_name] = adapter_class
+      name = adapter_class.agent_name
+      raise Error, "#{adapter_class.inspect} declares no agent name" if name.nil?
+
+      registry[name] = adapter_class
     end
 
     def registry

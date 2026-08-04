@@ -11,7 +11,10 @@ module AgentSessions
       base_dir default: "~/.local/share/amp", env: "XDG_DATA_HOME", env_join: "amp"
 
       store :threads, dir: "threads", glob: "T-*.json", format: :json
-      store :secrets, path: "secrets.json", format: :json, optional: true
+      # Design doc 8.4: Amp's local layout drifts between machines, so every path
+      # except threads/ and secrets.json is treated as drift when missing. These two
+      # are the stable ones, so their absence is a real failure, not layout drift.
+      store :secrets, path: "secrets.json", format: :json
 
       warning "the server holds the canonical copy; local threads may be a partial mirror"
     end

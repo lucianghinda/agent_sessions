@@ -10,6 +10,8 @@ module AgentSessions
     # An instance memoizes what it resolves. Build a new instance per resolution
     # rather than reusing one across changes to the env hash.
     class Base
+      include HomeExpansion
+
       class << self
         attr_reader :agent_name, :label_text, :documented_value, :verified_on_date, :declared_warnings
 
@@ -122,18 +124,6 @@ module AgentSessions
       def env_overrides
         names = [self.class.base_dir_config[:env], *self.class.store_configs.map { |c| c[:env] }]
         names.compact.uniq.map { |name| EnvOverride.new(name: name, value: presence(@env[name])) }
-      end
-
-      # ~ expands against the injected env, never the process environment, so callers
-      # can resolve paths for a machine that is not their own. A ~user form has no
-      # answer in an injected environment, so it stays literal instead of resolving
-      # against this machine's password database.
-      def expand(path)
-        case path
-        when %r{\A~(/|\z)} then File.expand_path(path.sub(%r{\A~}) { @env["HOME"] || Dir.home })
-        when /\A~/ then path
-        else File.expand_path(path)
-        end
       end
 
       def presence(value)

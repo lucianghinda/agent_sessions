@@ -38,4 +38,23 @@ class ValueObjectsTest < Minitest::Test
     assert check.pass?
     refute AgentSessions::Check.new(agent: :claude, status: :fail, claim: "c", detail: "d").pass?
   end
+
+  def test_location_matches_survives_a_symlink_loop
+    Dir.mktmpdir do |dir|
+      looped = File.join(dir, "looped")
+      File.symlink(looped, looped)
+      location = AgentSessions::Location.new(kind: :sessions, path: looped, format: :jsonl, glob: "*.jsonl")
+      assert_empty location.matches
+    end
+  end
+
+  def test_location_matches_treats_path_metacharacters_literally
+    Dir.mktmpdir do |dir|
+      weird = File.join(dir, "app [old]")
+      FileUtils.mkdir_p(weird)
+      FileUtils.touch(File.join(weird, "a.jsonl"))
+      location = AgentSessions::Location.new(kind: :sessions, path: weird, format: :jsonl, glob: "*.jsonl")
+      assert_equal [File.join(weird, "a.jsonl")], location.matches
+    end
+  end
 end

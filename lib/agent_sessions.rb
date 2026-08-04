@@ -9,6 +9,7 @@ require_relative "agent_sessions/env_override"
 require_relative "agent_sessions/location"
 require_relative "agent_sessions/store"
 require_relative "agent_sessions/check"
+require_relative "agent_sessions/home_expansion"
 require_relative "agent_sessions/adapters/base"
 require_relative "agent_sessions/adapters/claude"
 require_relative "agent_sessions/adapters/codex"
@@ -91,3 +92,8 @@ AgentSessions.register(AgentSessions::Adapters::Amp)
 AgentSessions.register(AgentSessions::Adapters::Opencode)
 AgentSessions.register(AgentSessions::Adapters::Cursor)
 AgentSessions.register(AgentSessions::Adapters::CursorIde)
+
+# The oldest verified_on among the built-in adapters. A claim about somebody
+# else's software is only as current as its weakest link, so this is the honest
+# answer to "when was this last known to be true".
+AgentSessions::VERIFIED_ON = AgentSessions.registry.values.map(&:verified_on_date).min

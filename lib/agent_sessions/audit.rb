@@ -4,6 +4,8 @@ module AgentSessions
   # Answers: are these plaintext transcripts inside anything that syncs?
   # Needs only Layer 1. Time Machine exclusion status is a planned addition.
   class Audit
+    include HomeExpansion
+
     Finding = Data.define(:agent, :kind, :path, :bytes, :synced_to)
 
     SYNC_ROOTS = {
@@ -62,11 +64,6 @@ module AgentSessions
       File.realpath(path)
     rescue Errno::ENOENT, Errno::EACCES, Errno::ELOOP
       nil
-    end
-
-    # SYNC_ROOTS only ever holds the ~/... form, so this needs no ~user handling.
-    def expand(path)
-      File.expand_path(path.sub(%r{\A~(?=/|\z)}) { @env["HOME"] || Dir.home })
     end
   end
 end

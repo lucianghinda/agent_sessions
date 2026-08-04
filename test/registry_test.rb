@@ -52,4 +52,8 @@ class RegistryTest < Minitest::Test
     error = assert_raises(AgentSessions::Error) { AgentSessions.register(anonymous) }
     assert_includes error.message, "agent name"
   end
+
+  def test_verified_on_is_the_oldest_adapter_date
+    assert_equal Date.new(2026, 7, 21), AgentSessions::VERIFIED_ON
+  end
 end

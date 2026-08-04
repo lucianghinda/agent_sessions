@@ -97,4 +97,9 @@ class AdapterBaseTest < Minitest::Test
     error = assert_raises(AgentSessions::Error) { adapter.new(env: { "HOME" => "/h" }).locate }
     assert_includes error.message, "base_dir"
   end
+
+  def test_empty_home_falls_back_like_an_absent_one
+    with_default = FakeAdapter.new(env: {}).locate.effective.path
+    assert_equal with_default, FakeAdapter.new(env: { "HOME" => "" }).locate.effective.path
+  end
 end

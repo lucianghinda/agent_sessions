@@ -33,3 +33,5 @@ module FixtureHelpers
     path
   end
 end
+
+require_relative "support/adapter_conformance"

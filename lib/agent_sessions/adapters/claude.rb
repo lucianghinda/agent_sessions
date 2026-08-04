@@ -16,11 +16,11 @@ module AgentSessions
       DEFAULT_CLEANUP_PERIOD_DAYS = 30
 
       def retention
-        settings.fetch("cleanupPeriodDays", DEFAULT_CLEANUP_PERIOD_DAYS)
+        configured_retention || DEFAULT_CLEANUP_PERIOD_DAYS
       end
 
       def retention_source
-        settings.key?("cleanupPeriodDays") ? :setting : :default
+        configured_retention ? :setting : :default
       end
 
       def warnings
@@ -35,6 +35,11 @@ module AgentSessions
 
       def settings
         @settings ||= read_json(File.join(base_dir, "settings.json"))
+      end
+
+      def configured_retention
+        value = settings["cleanupPeriodDays"]
+        value if value.is_a?(Integer) && !value.negative?
       end
     end
   end

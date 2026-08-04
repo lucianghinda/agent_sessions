@@ -41,6 +41,26 @@ class ClaudeAdapterTest < Minitest::Test
     end
   end
 
+  def test_nonsense_retention_settings_fall_back_to_default
+    [nil, "7", 7.5, -5].each do |value|
+      with_home do |home, env|
+        write(JSON.generate({ "cleanupPeriodDays" => value }), home, ".claude", "settings.json")
+        store = AgentSessions.locate(:claude, env: env)
+        assert_equal 30, store.retention, "expected #{value.inspect} to fall back"
+        assert_equal :default, store.retention_source, "expected #{value.inspect} to report :default"
+      end
+    end
+  end
+
+  def test_zero_retention_is_a_real_setting
+    with_home do |home, env|
+      write('{"cleanupPeriodDays": 0}', home, ".claude", "settings.json")
+      store = AgentSessions.locate(:claude, env: env)
+      assert_equal 0, store.retention
+      assert_equal :setting, store.retention_source
+    end
+  end
+
   def test_skip_prompt_history_env_adds_warning
     with_home do |_home, env|
       store = AgentSessions.locate(:claude, env: env.merge("CLAUDE_CODE_SKIP_PROMPT_HISTORY" => "1"))

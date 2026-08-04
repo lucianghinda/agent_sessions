@@ -67,6 +67,11 @@ module AgentSessions
         )
       end
 
+      # Checks every declared store against disk. The design doc says each adapter
+      # declares its own checks, and each one does: its store_configs decide what is
+      # looked for and whether an absence is a failure or drift. Content-level checks
+      # (first record type, encoding round-trip) need file reads and wait for Layer 3.
+      # An adapter that needs its own can override this and call super.
       def verify
         unless Dir.exist?(base_dir)
           return [check(:skip, "agent is installed", "#{base_dir} does not exist")]

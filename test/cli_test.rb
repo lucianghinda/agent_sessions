@@ -61,7 +61,9 @@ class CLITest < Minitest::Test
 
   def test_doctor_exit_code_reflects_failures
     with_home do |home, env|
-      FileUtils.mkdir_p(File.join(home, ".codex"))
+      # history.jsonl proves codex records data here; the missing required
+      # sessions store is then a real failure, not a never-used skip.
+      touch(home, ".codex", "history.jsonl")
       status, out, = run_cli("doctor", "codex", env: env)
       assert_equal 1, status
       assert_includes out, "✗"

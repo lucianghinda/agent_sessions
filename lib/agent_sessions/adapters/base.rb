@@ -74,9 +74,23 @@ module AgentSessions
       # looked for and whether an absence is a failure or drift. Content-level checks
       # (first record type, encoding round-trip) need file reads and wait for Layer 3.
       # An adapter that needs its own can override this and call super.
+      #
+      # The skip gate is the same signal Store#installed? uses: any declared store
+      # exists. It is deliberately NOT base-dir existence — ~/.cursor is created by
+      # the Cursor editor with no agent store in it (observed 2026-08-05), and the
+      # old gate made doctor report FAIL while `where` said "(not installed)".
+      # A missing store proves nothing on its own (never used? layout moved? the
+      # gem cannot tell), so :fail is reserved for the one case with evidence:
+      # some store exists, proving the agent records data here, while a required
+      # one is absent — the layout-moved signature.
       def verify
-        unless Dir.exist?(base_dir)
-          return [check(:skip, "agent is installed", "#{base_dir} does not exist")]
+        unless layers.any?(&:exists?)
+          detail = if Dir.exist?(base_dir)
+                     "#{base_dir} exists but holds none of the declared stores"
+                   else
+                     "#{base_dir} does not exist"
+                   end
+          return [check(:skip, "agent is installed", detail)]
         end
 
         self.class.store_configs.map do |config|

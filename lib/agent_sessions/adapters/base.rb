@@ -319,9 +319,35 @@ module AgentSessions
         "#{location.path} (#{count} file#{"s" unless count == 1})"
       end
 
+      # SystemCallError, not the four Errno constants this used to list: those
+      # four were the failures observed, not the exhaustive set that can
+      # happen. Task 7 (Cursor) made this reachable from a hook that runs
+      # EAGERLY for every session (started_at_for/updated_at_for read a
+      # sibling meta.json to answer, not lazily like project_path), so a
+      # single unreadable sibling file now has the blast radius of an
+      # unrescued raise: it takes the WHOLE listing down, not just its own
+      # session — Enumerator::Lazy#filter_map does not isolate one failing
+      # iteration. Two errnos found this way, both real, neither in the old
+      # list: ELOOP (a symlink loop — Location#files already rescues this on
+      # the glob side, so the codebase had already judged it reachable, and
+      # this method's own test reproduces it directly against a real
+      # symlink-loop meta.json) and EPERM (macOS TCC denies a protected path
+      # with EPERM, not EACCES — reported and reproduced during code review
+      # by reading a TCC-protected path directly; not independently
+      # re-verified here, but Base#started_at_for already rescues
+      # SystemCallError and its own comment names EPERM, so this method was
+      # simply behind its sibling, not making a different judgment call).
+      # This gets more likely, not less, once cursor_ide is repointed at
+      # ~/Library/Application Support/… in a future release — that path is
+      # TCC territory on macOS.
+      #
+      # What this still does NOT catch: a FIFO (named pipe) named meta.json
+      # blocks File.read forever rather than raising anything — same class of
+      # problem (a store directory containing something other than a plain
+      # file), no cheap fix, and out of scope here.
       def read_json(path)
         JSON.parse(File.read(path))
-      rescue Errno::ENOENT, Errno::EACCES, Errno::EISDIR, JSON::ParserError
+      rescue SystemCallError, JSON::ParserError
         {}
       end
 
@@ -334,9 +360,15 @@ module AgentSessions
       # mean an adapter whose started_at_for raised EACCES silently returned zero
       # sessions — a misdeclared adapter erasing a listing rather than failing.
       # A hook that raises is a programming error and surfaces, matching `all`.
+      #
+      # SystemCallError, not just ENOENT/EACCES, for the same reason
+      # started_at_for's own rescue already widened past those two (see its
+      # comment) and read_json's just did above: the FILE this stats can
+      # itself be a symlink loop (ELOOP) or TCC-denied (EPERM on macOS), not
+      # only vanished or permission-denied in the two ways originally listed.
       def build_session(path)
         stat = File.stat(path)
-      rescue Errno::ENOENT, Errno::EACCES
+      rescue SystemCallError
         nil
       else
         Session.new(

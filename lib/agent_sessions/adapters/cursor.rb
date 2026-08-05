@@ -21,6 +21,39 @@ module AgentSessions
               "reads are metadata-only until it is decoded"
       warning "no environment override is known for Cursor; XDG_CONFIG_HOME is not honoured"
 
+      # meta.json's field names (createdAtMs, updatedAtMs, cwd) are read from
+      # design doc 8.3, itself written from a machine that had them to check
+      # against — this machine has no ~/.cursor/chats (Cursor CLI is a
+      # separate product from the Cursor editor and is simply not installed
+      # here). Gated, the same shape as pi's identical warning about its own
+      # unverified header key and cursor_ide's about its real session
+      # location below: a "here is what breaks, please act on it" report
+      # reaches only someone whose declared store actually exists.
+      #
+      # Why THIS unverified assumption specifically needs a warning, where
+      # some others might get away without one: the failure is silent and
+      # looks correct. If createdAtMs/updatedAtMs are the wrong keys,
+      # meta_time returns nil and started_at_for/updated_at_for fall back to
+      # stat.birthtime/mtime — real file timestamps, not an obviously broken
+      # value. If cwd is the wrong key, project_path_for returns nil exactly
+      # the way it correctly does for a chat that genuinely has no recorded
+      # cwd. Nothing in the output distinguishes "Cursor recorded no
+      # project" from "the gem read the wrong key" — `projects`,
+      # `du --by project`, and `sessions_for_project` all silently
+      # under-report Cursor, with no error and no implausible-looking number
+      # anywhere to notice.
+      def warnings
+        list = super
+        if primary_layer.exists?
+          list << "Cursor's meta.json field names (createdAtMs, updatedAtMs, cwd) are unverified " \
+                  "against a real chat — this machine has none to check them against. If `projects` " \
+                  "or `du --by project` report nothing for Cursor despite it having chats, or every " \
+                  "session's started_at matches its file's own mtime exactly, those keys may be " \
+                  "wrong; please open an issue with the first bytes of one real meta.json"
+        end
+        list
+      end
+
       # chats/<chat-id>/<uuid>/store.db — two nested ids (design doc 16 Q5), so
       # the session id keeps both. The blob store is never opened here; the
       # sibling meta.json is the metadata source (8.3), with stat as fallback.
@@ -71,22 +104,37 @@ module AgentSessions
       # above, is what keeps meta_time and project_path_for simple `[]` reads
       # instead of three repeated type checks.
       #
-      # Unbounded and per-instance, deliberately not fixed here: every
-      # session's started_at_for/updated_at_for calls this EAGERLY (unlike
-      # Session#project_path, whose resolver is released after first call —
-      # see session.rb), so a full sweep (`sessions.force`, `project_paths`,
-      # or a sessions_for_project miss that scans every session) retains one
-      # parsed meta.json per chat for the adapter instance's whole lifetime.
-      # Bounded takes (`.first(n)`, an early sessions_for_project match) cost
-      # proportionally to what was actually consumed, matching the laziness
-      # `sessions` promises elsewhere. What keeps this from being a real leak:
-      # adapter instances are meant to be built fresh per resolution (Base's
-      # own class comment) and dropped after, not held for a process's
-      # lifetime the way a long-running server would; and meta.json is
-      # documented as tiny (design doc 8.3, plan follow-up 8's contrast with
-      # Amp's unbounded read_json). Revisit if either assumption stops
-      # holding — a caller that keeps one adapter instance alive across many
-      # full sweeps, or a store where meta.json stops being tiny.
+      # Unbounded and per-instance, deliberately not fixed here — but the
+      # retention mechanism is NOT "adapter instances get dropped after
+      # resolution" (an earlier version of this comment claimed that, and it
+      # is wrong): build_session passes `{ project_path_for(path) }` as
+      # Session's resolver block, and that block's `self` is THIS ADAPTER,
+      # because project_path_for is called with no explicit receiver.
+      # session.rb's UNRESOLVED handling only releases the closure
+      # (`@project_path_resolver = nil`) on a Session's FIRST #project_path
+      # call, not before — so any Session a caller keeps without ever reading
+      # project_path stays holding a live reference to the whole adapter,
+      # @meta included. `list` is exactly that caller: it never touches
+      # project_path, so every Session it returns keeps this adapter (and
+      # whatever of @meta got populated enumerating them) alive for as long
+      # as the caller holds that Session array — not just for one
+      # enumeration pass. All N sessions from one `sessions` call share the
+      # SAME adapter instance, so this is one retained @meta hash, not N
+      # copies of it.
+      #
+      # What actually keeps this acceptable is SIZE, not lifetime: measured
+      # during code review at roughly 890 bytes per parsed meta.json, ~3.5 MB
+      # retained for a 4,000-chat `list` (not independently re-measured
+      # here) — small enough to leave unbounded even though it outlives the
+      # call that built it. Growth is still bounded by
+      # CONSUMPTION the way `sessions`' laziness promises elsewhere
+      # (`.first(n)` costs n entries; an early sessions_for_project match
+      # costs less than a full sweep) — only the LIFETIME claim above was
+      # wrong, not the size-is-bounded-by-consumption one. Revisit if
+      # meta.json stops being tiny (design doc 8.3, plan follow-up 8's
+      # contrast with Amp's unbounded read_json) or a caller holds a large
+      # unresolved Session array for a long time; 3.5 MB briefly retained is
+      # not worth engineering around today.
       def meta_for(path)
         @meta ||= {}
         @meta[path] ||= begin
@@ -109,6 +157,11 @@ module AgentSessions
       # huge-but-finite value (an absurd but real millisecond count) is left
       # alone and produces an absurd-but-real Time, same as a negative one
       # produces a pre-1970 Time — neither raises, so neither is special-cased.
+      # A value that survives both guards but is still enormous (createdAtMs:
+      # 10**300, say) renders as a Time whose #to_s is hundreds of characters
+      # long — confirmed nothing here raises for it, so it is purely a
+      # rendering consequence for `list`'s column widths (Task 10) to bound,
+      # not a robustness gap this adapter needs to close.
       def meta_time(path, key)
         millis = meta_for(path)[key]
         return nil unless millis.is_a?(Numeric)

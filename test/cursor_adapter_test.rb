@@ -58,6 +58,18 @@ class CursorAdapterTest < Minitest::Test
     assert_equal :metadata, AgentSessions::Adapters::Cursor.fidelity_value
   end
 
+  # Gated like cursor_ide's warning about its real session location: a "here
+  # is what breaks, please act on it" report reaches only someone whose
+  # declared store exists to act on — silent for a user with no
+  # ~/.cursor/chats at all (this machine, today), present once chats exist.
+  def test_warns_that_meta_json_field_names_are_unverified_once_chats_exist
+    with_home do |home, env|
+      refute(AgentSessions.locate(:cursor, env: env).warnings.any? { |w| w.include?("createdAtMs") })
+      build_fixture(home)
+      assert(AgentSessions.locate(:cursor, env: env).warnings.any? { |w| w.include?("createdAtMs") })
+    end
+  end
+
   # --- Malformed-shape guards -------------------------------------------------
   # Mirrors Amp's own section by the same name: presence of a key is not a
   # usable value (rule 1), and the container holding it needs its type
@@ -92,6 +104,15 @@ class CursorAdapterTest < Minitest::Test
   # check rather than a pre-division check on millis alone (see the comment
   # on meta_time): millis itself is a valid, finite Integer here, and only
   # overflows once divided by 1000.0.
+  # silence_warnings wraps the lookup: real 1e400 JSON overflowing to
+  # Infinity is exactly what this test targets, and Ruby's own -w narrates
+  # that at the two points it happens (JSON's internal Float() call, and this
+  # adapter's `/ 1000.0`) — informative when hunting the bug, but noise once
+  # the guard it exists to prove is in place and covered by an assertion.
+  # This is a report artifact, not a behavior change: nothing here touches
+  # what meta_time returns, only whether Ruby narrates the overflow reaching
+  # it, and the surrounding assertions still fail exactly as they would
+  # unsilenced if the guard regressed.
   def test_started_at_falls_back_to_stat_when_created_at_ms_overflows_to_infinity
     with_home do |home, env|
       db = write("", home, ".cursor", "chats", "chat-huge", "u", "store.db")
@@ -102,7 +123,7 @@ class CursorAdapterTest < Minitest::Test
       # bytes on disk are the finite-looking text "1e400", and it is JSON.parse
       # — not this test file's own Ruby source — that overflows it to Infinity.
       write('{"createdAtMs": 1e400}', home, ".cursor", "chats", "chat-huge", "u", "meta.json")
-      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-huge/u" }
+      session = silence_warnings { AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-huge/u" } }
       assert_equal base_started_at(session), session.started_at
       assert_equal File.mtime(db), session.updated_at
     end
@@ -117,7 +138,7 @@ class CursorAdapterTest < Minitest::Test
     with_home do |home, env|
       db = write("", home, ".cursor", "chats", "chat-bignum", "u", "store.db")
       write(JSON.generate({ createdAtMs: 10**400 }), home, ".cursor", "chats", "chat-bignum", "u", "meta.json")
-      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-bignum/u" }
+      session = silence_warnings { AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-bignum/u" } }
       assert_equal base_started_at(session), session.started_at
       assert_equal File.mtime(db), session.updated_at
     end
@@ -136,6 +157,38 @@ class CursorAdapterTest < Minitest::Test
       session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-str/u" }
       assert_equal base_started_at(session), session.started_at
       assert_equal File.mtime(db), session.updated_at
+    end
+  end
+
+  # --- read_json survives an unreadable sibling -------------------------------
+  # Task 7 made Base#read_json reachable EAGERLY, from started_at_for and
+  # updated_at_for, for every single Cursor session — the first adapter to do
+  # so; every earlier caller of read_json only reached it lazily, through the
+  # deferred project_path resolver. That turned Base#read_json's original
+  # rescue (four specific Errno constants, none of them ELOOP) into a real
+  # bug, not a theoretical gap: a symlink-loop meta.json next to a HEALTHY
+  # chat raised Errno::ELOOP out of Enumerator::Lazy#filter_map and took the
+  # WHOLE `sessions` enumeration down with it — the healthy chat included, not
+  # just the looped one. Fixed in Base#read_json and Base#build_session
+  # (SystemCallError, not an enumerated Errno list — see their comments for
+  # the EPERM evidence alongside this ELOOP one). Pinned here, in the adapter
+  # that made it reachable, because "the healthy sibling survives" is the part
+  # a narrower fix (rescuing only Errno::ELOOP, say) would not obviously get
+  # right without a test asserting the SURVIVING session, not just the absence
+  # of a raise.
+  def test_a_symlink_loop_meta_json_does_not_take_down_a_healthy_sibling_chat
+    with_home do |home, env|
+      build_fixture(home)
+      write("", home, ".cursor", "chats", "chat-loop", "u", "store.db")
+      loop_path = File.join(home, ".cursor", "chats", "chat-loop", "u", "meta.json")
+      File.symlink(loop_path, loop_path)
+
+      sessions = AgentSessions::Adapters::Cursor.new(env: env).sessions.force
+      assert_equal 2, sessions.size, "expected the listing to survive a symlink-loop meta.json"
+
+      looped = sessions.find { |s| s.id == "chat-loop/u" }
+      refute_nil looped, "expected a session for the chat whose meta.json is the symlink loop"
+      assert_nil looped.project_path
     end
   end
 
@@ -169,6 +222,19 @@ class CursorAdapterTest < Minitest::Test
   def test_session_id_from_does_not_raise_for_a_shallow_path
     adapter = AgentSessions::Adapters::Cursor.new(env: { "HOME" => "/h" })
     assert_equal "///", adapter.session_id_from("/store.db")
+  end
+
+  private
+
+  # See the comment on its two callers above: this only suppresses Ruby's -w
+  # narration of an overflow the surrounding assertions already pin, never
+  # the overflow itself.
+  def silence_warnings
+    original = $VERBOSE
+    $VERBOSE = nil
+    yield
+  ensure
+    $VERBOSE = original
   end
 end
 

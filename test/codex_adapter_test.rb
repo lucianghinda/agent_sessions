@@ -12,6 +12,11 @@ class CodexAdapterTest < Minitest::Test
   # Line 1 is session_meta with payload.cwd.
   FIXTURE_UUID = "019d352d-1d88-7ed3-b0cc-dfab5f37ecd9"
 
+  # The meta timestamp (06:16:25) and the filename timestamp (09:12:03)
+  # deliberately disagree — no real file does this, but it is what gives
+  # test_started_at_comes_from_the_filename_not_a_read its teeth: if
+  # started_at_for ever fell back to reading the file, this fixture would
+  # catch it by returning the wrong hour. Do not "fix" them to match.
   def build_fixture(home)
     meta = { type: "session_meta", timestamp: "2026-07-21T06:16:25.064Z",
              payload: { id: FIXTURE_UUID, cwd: "/Users/you/app", cli_version: "0.0.0" } }
@@ -54,6 +59,54 @@ class CodexAdapterTest < Minitest::Test
       write("{}", home, ".codex", "sessions", "2026", "07", "21", "rollout-weird.jsonl")
       session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal "rollout-weird", session.id
+      refute_nil session.started_at # confirms started_at_for's super fallback fired too, not just session_id_from's
+    end
+  end
+
+  # A sync tool's or backup's "(conflicted copy)" suffix must not be read as
+  # part of the id: (.+) would swallow it greedily against \.jsonl\z, so the
+  # uuid capture is pinned to its real shape (8-4-4-4-12 hex) instead. This
+  # filename does not match FILENAME at all, so it falls back to the
+  # basename, where the suffix stays visible rather than looking canonical.
+  def test_conflicted_copy_suffix_does_not_get_absorbed_into_the_id
+    with_home do |home, env|
+      write("{}", home, ".codex", "sessions", "2026", "07", "21",
+            "rollout-2026-07-21T09-12-03-#{FIXTURE_UUID} (conflicted copy).jsonl")
+      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      assert_equal "rollout-2026-07-21T09-12-03-#{FIXTURE_UUID} (conflicted copy)", session.id
+    end
+  end
+
+  # month 13 and minute 60 both pass FILENAME's \d{2} groups (00-99) but both
+  # raise ArgumentError from Time.new, through different internal checks
+  # ("mon out of range" vs "min out of range") — proving the rescue in
+  # started_at_for is not tuned to a single failure path.
+  #
+  # The assertion that matters is that the LISTING SURVIVES: build_session
+  # deliberately lets a raising hook propagate and take the whole enumeration
+  # down, on the theory that a raising hook is an adapter bug. A filename with
+  # an out-of-range date is file data, not a bug, so started_at_for must
+  # absorb it locally — one bad name among two good ones must still yield all
+  # three sessions, not zero.
+  def test_a_filename_with_an_out_of_range_date_does_not_take_down_the_whole_listing
+    [
+      "rollout-2026-13-21T09-12-03-#{FIXTURE_UUID}.jsonl", # month 13
+      "rollout-2026-07-21T09-60-03-#{FIXTURE_UUID}.jsonl" # minute 60
+    ].each do |bad_filename|
+      with_home do |home, env|
+        write("{}", home, ".codex", "sessions", "2026", "07", "21", bad_filename)
+        write("{}", home, ".codex", "sessions", "2026", "07", "22", "rollout-2026-07-22T09-12-03-#{FIXTURE_UUID}.jsonl")
+        write("{}", home, ".codex", "sessions", "2026", "07", "23", "rollout-2026-07-23T09-12-03-#{FIXTURE_UUID}.jsonl")
+
+        sessions = AgentSessions::Adapters::Codex.new(env: env).sessions.force
+        assert_equal 3, sessions.size, "expected the listing to survive #{bad_filename.inspect}"
+
+        # FILENAME still matches (its \d{2} groups accept the digits); only
+        # Time.new rejects them. session_id_from is unaffected — it is
+        # started_at_for specifically that must fall back to stat.birthtime.
+        bad_session = sessions.find { |s| s.path.end_with?(bad_filename) }
+        refute_nil bad_session.started_at, "expected started_at_for's rescue to fall back to stat.birthtime"
+      end
     end
   end
 

@@ -164,6 +164,23 @@ class OpencodeAdapterTest < Minitest::Test
     end
   end
 
+  # The NULL case above does not prove the is_a?(String) guard: SQL NULL already
+  # arrives as Ruby nil, so the guard is a no-op for it. SQLite's storage classes
+  # are per-value, not per-column, so a BLOB lands in `directory` as an
+  # ASCII-8BIT String and a bare number lands as an Integer — the latter is what
+  # would otherwise reach project_paths' sort and raise on comparison with a
+  # String. This is the fixture that exercises the guard's real branch.
+  def test_a_non_string_directory_is_excluded_rather_than_reaching_the_sort
+    with_home do |home, env|
+      build_malformed_db(home, [["ses_int_dir", 42, 1, 2], ["ses_ok", "/Users/you/app", 3, 4]])
+      adapter = AgentSessions::Adapters::Opencode.new(env: env)
+      sessions = adapter.sessions.force
+      assert_equal 2, sessions.size, "expected the listing to survive a non-String directory"
+      assert_nil sessions.find { |s| s.id == "ses_int_dir" }.project_path
+      assert_equal ["/Users/you/app"], adapter.project_paths
+    end
+  end
+
   private
 
   def silence_warnings

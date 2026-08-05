@@ -22,6 +22,9 @@ class SessionTest < Minitest::Test
     session = build
     assert_equal :claude, session.agent
     assert_equal "018f2a7c", session.id
+    assert_equal "/h/.claude/projects/-x/018f2a7c.jsonl", session.path
+    assert_equal Time.utc(2026, 7, 14, 9, 12, 3), session.started_at
+    assert_equal Time.utc(2026, 7, 14, 10, 44, 51), session.updated_at
     assert_equal 412_003, session.bytes
     assert_equal :jsonl, session.format
     assert_equal :full, session.fidelity
@@ -75,5 +78,19 @@ class SessionTest < Minitest::Test
     assert_equal "/Users/you/app", hash.fetch(:project_path)
     assert_equal "claude:018f2a7c", hash.fetch(:uid)
     assert_equal 412_003, hash.fetch(:bytes)
+    assert_equal %i[agent id uid path project_path started_at updated_at bytes format fidelity],
+                 hash.keys
+  end
+
+  def test_inspect_does_not_resolve_and_shows_unresolved
+    calls = 0
+    session = build { calls += 1; "/Users/you/app" }
+    assert_match(/project_path: \(unresolved\)/, session.inspect)
+    assert_equal 0, calls
+  end
+
+  def test_inspect_shows_resolved_project_path
+    session = build(project_path: "/Users/you/app")
+    assert_match(%r{project_path: "/Users/you/app"}, session.inspect)
   end
 end

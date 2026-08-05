@@ -12,10 +12,18 @@ module AgentSessions
     class Base
       include HomeExpansion
 
+      FIDELITIES = %i[full messages metadata unsupported].freeze
+
+      # Caps how many bytes one iteration of a JSONL scan may pull into memory.
+      # "One line" is not a bounded quantity on disk: a record carrying a pasted
+      # file or a base64 image is routinely tens of MB, and a truncated file may
+      # hold no newline at all. An over-long line arrives as chunks of this size,
+      # which fail to parse and are skipped, so the scan gives up rather than
+      # reading a 2.6 GB file into a single String.
+      MAX_LINE_BYTES = 1_000_000
+
       class << self
         attr_reader :agent_name, :label_text, :documented_value, :verified_on_date, :declared_warnings
-
-        FIDELITIES = %i[full messages metadata unsupported].freeze
 
         # :unsupported is the honest default for an adapter that has not declared
         # what a reader could reconstruct from its format.
@@ -120,15 +128,25 @@ module AgentSessions
         end
       end
 
-      # Lazily enumerates the primary store (adapters declare it first). Each
-      # consumed session costs one stat plus filename parsing — never a content
-      # read. project_path is the exception and pays for itself on first access.
+      # Lazily enumerates the primary store. Each consumed session costs one stat
+      # plus filename parsing — never a content read. project_path is the exception
+      # and pays for itself on first access.
+      #
+      # A store the gem has no layout for is refused rather than reported empty:
+      # Location#enumerable? exists precisely so "nothing here to enumerate" and
+      # "enumerated, found none" stay distinguishable, and silently returning no
+      # sessions is this gem's worst failure mode.
       def sessions
-        layers.first.files.lazy.map { |path| build_session(path) }
+        unless primary_layer.enumerable?
+          raise Error, "#{self.class.agent_name} store #{primary_layer.kind} at " \
+                       "#{primary_layer.path} has no known layout to enumerate"
+        end
+
+        primary_layer.files.lazy.filter_map { |path| build_session(path) }
       end
 
-      # The cheap path matches the adapter's project encoding against the session
-      # file's parent directory name — no reads (design doc section 7). The
+      # The cheap path matches the adapter's project encoding against the name of
+      # the directory holding the session — no reads (design doc section 7). The
       # encodings are lossy ("/a_b" and "/a/b" encode identically), which the
       # design accepts: forward-encoding is exact for real directories, and the
       # collision case requires two projects that differ only in separator.
@@ -137,18 +155,25 @@ module AgentSessions
         dir = File.expand_path(dir)
         encoded = encode_project(dir)
         if encoded
-          sessions.select { |session| File.basename(File.dirname(session.path)) == encoded }
+          sessions.select { |session| project_dir_name(session.path) == encoded }
         else
+          # expand_path does not resolve symlinks, so a cwd recorded as
+          # /private/tmp/x will not match a caller's /tmp/x on macOS. Deliberate:
+          # realpath would cost a stat per comparison to fix a rare mismatch.
           sessions.select { |session| session.project_path == dir }
         end
       end
 
-      # Distinct recorded project paths. This is the read-everything direction
-      # (design doc section 7): the encodings cannot be reversed, so the recorded
-      # cwd inside each file is the only reliable source. Sessions whose project
-      # cannot be determined are excluded, not returned as nil.
+      # Distinct recorded project paths, sorted. This is the read-everything
+      # direction (design doc section 7): the encodings cannot be reversed, so the
+      # recorded cwd inside each file is the only reliable source. Sessions whose
+      # project cannot be determined are excluded, not returned as nil.
+      #
+      # Sorted rather than left in glob order because a stable order is what makes
+      # `projects` output diffable and `du --by project` deterministic — and
+      # adapters answering from a database would otherwise impose their own.
       def project_paths
-        sessions.map(&:project_path).force.compact.uniq
+        sessions.filter_map(&:project_path).uniq.force.sort
       end
 
       # --- Layer 2 hooks, overridable per adapter ---
@@ -160,14 +185,26 @@ module AgentSessions
       # nil means this adapter has no cheap directory-name rule.
       def encode_project(_dir) = nil
 
+      # The directory whose name the encoding must match. Overridable: not every
+      # store puts the encoded project directly above the session file — cursor_ide
+      # nests projects/<name>/agent-transcripts/*, where the immediate parent is
+      # agent-transcripts and matching it would find nothing, silently.
+      def project_dir_name(path) = File.basename(File.dirname(path))
+
       # nil means the project is unknown for this session. Adapters override
       # with a bounded read of their own metadata; Base cannot guess.
       def project_path_for(_path) = nil
 
-      def started_at_for(path)
-        File.birthtime(path)
-      rescue NotImplementedError, Errno::ENOENT
-        nil # some Linux filesystems cannot answer; nil beats a wrong guess
+      # Both time hooks take the stat the enumerator already holds, so a session
+      # still costs one syscall. path is passed for adapters that answer from a
+      # sibling metadata file instead.
+      #
+      # nil beats a wrong guess when the filesystem cannot answer at all — and it
+      # says so through ENOSYS/EPERM from statx as often as NotImplementedError.
+      def started_at_for(_path, stat)
+        stat.birthtime
+      rescue NotImplementedError, SystemCallError
+        nil
       end
 
       def updated_at_for(_path, stat) = stat.mtime
@@ -194,6 +231,9 @@ module AgentSessions
       def layers
         @layers ||= self.class.store_configs.map { |config| resolve(config) }
       end
+
+      # The store sessions live in. Adapters declare it first, by convention.
+      def primary_layer = layers.first
 
       # single_file is a property of the declaration, not of the resolved path: a
       # store-level env override replaces where the layer lives without changing
@@ -238,25 +278,33 @@ module AgentSessions
         {}
       end
 
+      # nil drops the session from the enumeration. A file that vanished between
+      # the glob and its stat is one fewer session, not an error: enumeration is
+      # lazy, so that window spans the whole listing, and agents rotate and
+      # compact these logs while a caller is still reading them.
       def build_session(path)
         stat = File.stat(path)
         Session.new(
           agent: self.class.agent_name,
           id: session_id_from(path),
           path: path,
-          started_at: started_at_for(path),
+          started_at: started_at_for(path, stat),
           updated_at: updated_at_for(path, stat),
           bytes: stat.size,
-          format: layers.first.format,
+          format: primary_layer.format,
           fidelity: self.class.fidelity_value
         ) { project_path_for(path) }
+      rescue Errno::ENOENT, Errno::EACCES
+        nil
       end
 
-      # Streams up to `limit` lines looking for a JSON record carrying `key`.
-      # Bounded so a 2.6 GB session file costs a few KB, and tolerant of the
-      # non-JSON or differently-shaped lines real logs contain.
+      # Streams a JSONL file looking for a record carrying `key`. Bounded twice
+      # over — `limit` caps the iterations, MAX_LINE_BYTES caps each read — so the
+      # worst case is a few tens of MB even for a file with no newlines in it.
+      # Tolerant of the non-JSON lines and non-object records real logs contain:
+      # a scan that gives up is worth more here than one that raises.
       def scan_jsonl_for_key(path, key, limit: 25)
-        File.foreach(path).with_index do |line, index|
+        File.foreach(path, "\n", MAX_LINE_BYTES).with_index do |line, index|
           break if index >= limit
 
           begin
@@ -264,7 +312,7 @@ module AgentSessions
           rescue JSON::ParserError, EncodingError
             next
           end
-          return record if record.key?(key)
+          return record if record.is_a?(Hash) && record.key?(key)
         end
         nil
       rescue Errno::ENOENT, Errno::EACCES, Errno::EISDIR

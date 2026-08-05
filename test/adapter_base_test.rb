@@ -230,4 +230,146 @@ class AdapterBaseTest < Minitest::Test
       assert_equal ["/Users/you/app"], reading.new(env: env).project_paths
     end
   end
+
+  # Glob order is not project order, and an adapter answering from a database
+  # would impose its own. A stable order is what makes the output diffable.
+  def test_project_paths_are_sorted_rather_than_left_in_glob_order
+    reading = Class.new(AgentSessions::Adapters::Base) do
+      agent :slow
+      base_dir default: "~/.slow"
+      store :sessions, dir: "sessions", glob: "*.json", format: :json
+
+      def project_path_for(path) = read_json(path)["cwd"]
+    end
+
+    with_home do |home, env|
+      write('{"cwd":"/Users/you/zebra"}', home, ".slow", "sessions", "s1.json")
+      write('{"cwd":"/Users/you/app"}', home, ".slow", "sessions", "s2.json")
+      assert_equal ["/Users/you/app", "/Users/you/zebra"], reading.new(env: env).project_paths
+    end
+  end
+
+  # cursor_ide already ships the counter-shape — projects/<name>/agent-transcripts/*
+  # — where matching the immediate parent would find nothing, silently.
+  def test_sessions_for_project_asks_the_adapter_which_directory_holds_the_encoding
+    nested = Class.new(AgentSessions::Adapters::Base) do
+      agent :nested
+      base_dir default: "~/.nested"
+      store :sessions, dir: "projects", glob: "*/transcripts/*.jsonl", format: :jsonl
+
+      def encode_project(dir) = File.basename(dir)
+      def project_dir_name(path) = File.basename(File.dirname(File.dirname(path)))
+    end
+
+    with_home do |home, env|
+      touch(home, ".nested", "projects", "app", "transcripts", "s1.jsonl")
+      touch(home, ".nested", "projects", "other", "transcripts", "s2.jsonl")
+      found = nested.new(env: env).sessions_for_project("/Users/you/app").force
+      assert_equal ["s1"], found.map(&:id)
+    end
+  end
+
+  # Both time hooks take the stat the enumerator already holds, so a session costs
+  # one syscall rather than two — and an adapter overriding both to read the same
+  # metadata file sees one arity, not two.
+  def test_time_hooks_receive_the_stat_the_enumerator_already_took
+    timed = Class.new(AgentSessions::Adapters::Base) do
+      agent :timed
+      base_dir default: "~/.timed"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def started_at_for(_path, stat) = stat.mtime - 60
+    end
+
+    with_home do |home, env|
+      path = touch(home, ".timed", "sessions", "s1.jsonl")
+      session = timed.new(env: env).sessions.first
+      assert_equal File.mtime(path) - 60, session.started_at
+      assert_equal File.mtime(path), session.updated_at
+    end
+  end
+
+  # Enumeration is lazy, so the window between the glob and a stat spans the whole
+  # listing — and agents rotate and compact these logs while a caller reads them.
+  def test_sessions_skip_files_that_vanish_after_the_glob
+    with_home do |home, env|
+      gone = touch(home, ".fake", "sessions", "gone.jsonl")
+      touch(home, ".fake", "sessions", "kept.jsonl")
+      sessions = FakeAdapter.new(env: env).sessions
+      FileUtils.rm(gone)
+      assert_equal ["kept"], sessions.force.map(&:id)
+    end
+  end
+
+  # Location#enumerable? exists so "no layout to enumerate" and "enumerated, found
+  # none" stay apart. Returning [] here would make the first look like the second.
+  def test_sessions_refuse_a_primary_store_with_no_known_layout
+    shapeless = Class.new(AgentSessions::Adapters::Base) do
+      agent :shapeless
+      base_dir default: "~/.shapeless"
+      store :sessions, dir: "sessions", format: :json # no glob: no way in
+    end
+
+    error = assert_raises(AgentSessions::Error) { shapeless.new(env: { "HOME" => "/h" }).sessions }
+    assert_includes error.message, "shapeless"
+    assert_includes error.message, "sessions"
+  end
+
+  # --- scan_jsonl_for_key: the shared bounded read every Layer 2 adapter uses ---
+
+  def test_scan_jsonl_finds_a_record_on_a_later_line
+    with_home do |home|
+      path = write(%({"a":1}\n{"cwd":"/p"}\n), home, "s.jsonl")
+      assert_equal "/p", scan(path, "cwd")["cwd"]
+    end
+  end
+
+  def test_scan_jsonl_stops_at_the_line_limit
+    with_home do |home|
+      lines = Array.new(29) { '{"a":1}' } + ['{"cwd":"/p"}']
+      path = write("#{lines.join("\n")}\n", home, "s.jsonl")
+      assert_nil scan(path, "cwd")
+      assert_equal "/p", scan(path, "cwd", limit: 30)["cwd"]
+    end
+  end
+
+  def test_scan_jsonl_survives_lines_that_are_not_json
+    with_home do |home|
+      path = write(%(not json at all\n\n{"cwd":"/p"}\n), home, "s.jsonl")
+      assert_equal "/p", scan(path, "cwd")["cwd"]
+    end
+  end
+
+  # A JSONL log is not guaranteed to hold only objects, and #key? on an array or
+  # a scalar raised NoMethodError straight out of the method.
+  def test_scan_jsonl_survives_json_lines_that_are_not_objects
+    with_home do |home|
+      path = write(%([1,2,3]\nnull\n42\n"str"\ntrue\n{"cwd":"/p"}\n), home, "s.jsonl")
+      assert_equal "/p", scan(path, "cwd")["cwd"]
+    end
+  end
+
+  # The line limit bounds iterations, not bytes: one record carrying a pasted file
+  # is routinely tens of MB. Reading it as MAX_LINE_BYTES chunks caps the memory,
+  # and those chunks count against the limit — which is what this pins. Unchunked,
+  # the blob is a single line and the record below it is found within any limit.
+  def test_scan_jsonl_reads_an_over_long_line_in_bounded_chunks
+    with_home do |home|
+      blob = "x" * ((AgentSessions::Adapters::Base::MAX_LINE_BYTES * 2) + 100)
+      path = write(%({"junk":"#{blob}"}\n{"cwd":"/p"}\n), home, "s.jsonl")
+      assert_nil scan(path, "cwd", limit: 2)
+      assert_equal "/p", scan(path, "cwd")["cwd"]
+    end
+  end
+
+  def test_scan_jsonl_returns_nil_for_a_file_that_is_not_there
+    assert_nil scan("/no/such/session.jsonl", "cwd")
+  end
+
+  private
+
+  # scan_jsonl_for_key is private — it is an adapter's tool, not a public API.
+  def scan(path, key, **options)
+    FakeAdapter.new(env: {}).send(:scan_jsonl_for_key, path, key, **options)
+  end
 end

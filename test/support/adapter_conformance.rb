@@ -82,7 +82,7 @@ module AdapterConformance
       assert_equal adapter_class.agent_name, session.agent
       assert_equal "#{adapter_class.agent_name}:#{expected_session_id}", session.uid
       refute_nil session.updated_at
-      assert_includes %i[full messages metadata unsupported], session.fidelity
+      assert_equal adapter_class.fidelity_value, session.fidelity
     end
   end
 
@@ -109,6 +109,16 @@ module AdapterConformance
       found = adapter.sessions_for_project(expected_project_path).force
       assert_equal [expected_session_id], found.map(&:id)
       assert_empty adapter.sessions_for_project("/definitely/not/this/project").force
+    end
+  end
+
+  def test_conformance_project_paths_lists_the_fixture_project
+    skip_unless_layer2
+    skip "#{adapter_class.agent_name} cannot know its project paths" if expected_project_path.nil?
+
+    with_home do |home, env|
+      build_fixture(home)
+      assert_equal [expected_project_path], adapter_class.new(env: env).project_paths
     end
   end
 

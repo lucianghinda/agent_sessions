@@ -52,4 +52,71 @@ module AdapterConformance
     second = adapter_class.new(env: { "HOME" => "/home-two" }).locate.effective.path
     refute_equal first, second
   end
+
+  # --- Layer 2 conformance ---------------------------------------------------
+  # Opt in by additionally defining:
+  #   expected_session_id     -> id of the single session build_fixture creates
+  #   expected_project_path   -> the project recorded in that fixture, or nil
+  #                              when the agent genuinely cannot know it
+  # Tests skip when these are absent, so Layer-1-only adapters stay green.
+
+  def test_conformance_sessions_are_lazy
+    with_home do |_home, env|
+      assert_instance_of Enumerator::Lazy, adapter_class.new(env: env).sessions
+    end
+  end
+
+  def test_conformance_absent_agent_has_no_sessions
+    with_home do |_home, env|
+      assert_empty adapter_class.new(env: env).sessions.force
+    end
+  end
+
+  def test_conformance_enumerates_exactly_the_fixture_session
+    skip_unless_layer2
+    with_home do |home, env|
+      build_fixture(home)
+      sessions = adapter_class.new(env: env).sessions.force
+      assert_equal [expected_session_id], sessions.map(&:id)
+      session = sessions.first
+      assert_equal adapter_class.agent_name, session.agent
+      assert_equal "#{adapter_class.agent_name}:#{expected_session_id}", session.uid
+      refute_nil session.updated_at
+      assert_includes %i[full messages metadata unsupported], session.fidelity
+    end
+  end
+
+  def test_conformance_project_path_matches_the_fixture
+    skip_unless_layer2
+    with_home do |home, env|
+      build_fixture(home)
+      session = adapter_class.new(env: env).sessions.first
+      if expected_project_path.nil?
+        assert_nil session.project_path
+      else
+        assert_equal expected_project_path, session.project_path
+      end
+    end
+  end
+
+  def test_conformance_for_project_round_trips
+    skip_unless_layer2
+    skip "#{adapter_class.agent_name} cannot know its project paths" if expected_project_path.nil?
+
+    with_home do |home, env|
+      build_fixture(home)
+      adapter = adapter_class.new(env: env)
+      found = adapter.sessions_for_project(expected_project_path).force
+      assert_equal [expected_session_id], found.map(&:id)
+      assert_empty adapter.sessions_for_project("/definitely/not/this/project").force
+    end
+  end
+
+  private
+
+  def skip_unless_layer2
+    return if respond_to?(:expected_session_id, true)
+
+    skip "define expected_session_id and expected_project_path for Layer 2 conformance"
+  end
 end

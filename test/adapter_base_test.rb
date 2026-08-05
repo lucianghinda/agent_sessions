@@ -127,4 +127,107 @@ class AdapterBaseTest < Minitest::Test
     with_default = FakeAdapter.new(env: {}).locate.effective.path
     assert_equal with_default, FakeAdapter.new(env: { "HOME" => "" }).locate.effective.path
   end
+
+  def test_sessions_is_a_lazy_enumerator
+    with_home do |_home, env|
+      assert_instance_of Enumerator::Lazy, FakeAdapter.new(env: env).sessions
+    end
+  end
+
+  def test_sessions_builds_one_session_per_primary_store_file
+    with_home do |home, env|
+      touch(home, ".fake", "sessions", "abc.jsonl")
+      touch(home, ".fake", "history.jsonl") # a different layer — not a session
+      sessions = FakeAdapter.new(env: env).sessions.force
+      assert_equal ["abc"], sessions.map(&:id)
+      session = sessions.first
+      assert_equal :fake, session.agent
+      assert_equal File.join(home, ".fake", "sessions", "abc.jsonl"), session.path
+      assert_equal :jsonl, session.format
+      assert_equal :full, session.fidelity
+      assert_equal File.mtime(session.path), session.updated_at
+      assert_equal 0, session.bytes
+    end
+  end
+
+  def test_default_project_path_is_nil
+    with_home do |home, env|
+      touch(home, ".fake", "sessions", "abc.jsonl")
+      assert_nil FakeAdapter.new(env: env).sessions.first.project_path
+    end
+  end
+
+  def test_fidelity_defaults_to_unsupported_when_undeclared
+    adapter = Class.new(AgentSessions::Adapters::Base) { agent :bare }
+    assert_equal :unsupported, adapter.fidelity_value
+  end
+
+  def test_fidelity_rejects_unknown_values
+    error = assert_raises(ArgumentError) do
+      Class.new(AgentSessions::Adapters::Base) { fidelity :excellent }
+    end
+    assert_includes error.message, "excellent"
+  end
+
+  def test_sessions_for_project_uses_the_encoded_dir_when_the_adapter_has_a_rule
+    encoding = Class.new(AgentSessions::Adapters::Base) do
+      agent :cheap
+      label "Cheap"
+      documented true
+      verified_on "2026-07-01"
+      base_dir default: "~/.cheap"
+      store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
+
+      def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
+      # No project_path_for: if the cheap path reads file content, this raises.
+      def project_path_for(_path) = raise("cheap path must not read")
+    end
+
+    with_home do |home, env|
+      touch(home, ".cheap", "sessions", "-Users-you-app", "s1.jsonl")
+      touch(home, ".cheap", "sessions", "-Users-you-other", "s2.jsonl")
+      found = encoding.new(env: env).sessions_for_project("/Users/you/app").force
+      assert_equal ["s1"], found.map(&:id)
+    end
+  end
+
+  def test_sessions_for_project_falls_back_to_reading_project_paths
+    reading = Class.new(AgentSessions::Adapters::Base) do
+      agent :slow
+      label "Slow"
+      documented true
+      verified_on "2026-07-01"
+      base_dir default: "~/.slow"
+      store :sessions, dir: "sessions", glob: "*.json", format: :json
+
+      def project_path_for(path) = read_json(path)["cwd"]
+    end
+
+    with_home do |home, env|
+      write('{"cwd":"/Users/you/app"}', home, ".slow", "sessions", "s1.json")
+      write('{"cwd":"/Users/you/other"}', home, ".slow", "sessions", "s2.json")
+      found = reading.new(env: env).sessions_for_project("/Users/you/app").force
+      assert_equal ["s1"], found.map(&:id)
+    end
+  end
+
+  def test_project_paths_reads_distinct_recorded_projects
+    reading = Class.new(AgentSessions::Adapters::Base) do
+      agent :slow
+      label "Slow"
+      documented true
+      verified_on "2026-07-01"
+      base_dir default: "~/.slow"
+      store :sessions, dir: "sessions", glob: "*.json", format: :json
+
+      def project_path_for(path) = read_json(path)["cwd"]
+    end
+
+    with_home do |home, env|
+      write('{"cwd":"/Users/you/app"}', home, ".slow", "sessions", "s1.json")
+      write('{"cwd":"/Users/you/app"}', home, ".slow", "sessions", "s2.json")
+      write("{}", home, ".slow", "sessions", "s3.json") # unknowable — excluded, not nil
+      assert_equal ["/Users/you/app"], reading.new(env: env).project_paths
+    end
+  end
 end

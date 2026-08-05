@@ -15,6 +15,12 @@ module AgentSessions
       class << self
         attr_reader :agent_name, :label_text, :documented_value, :verified_on_date, :declared_warnings
 
+        FIDELITIES = %i[full messages metadata unsupported].freeze
+
+        # :unsupported is the honest default for an adapter that has not declared
+        # what a reader could reconstruct from its format.
+        def fidelity_value = @fidelity_value || :unsupported
+
         def base_dir_config
           @base_dir_config || raise(Error, "#{inspect} declares no base_dir")
         end
@@ -29,6 +35,14 @@ module AgentSessions
         def label(text) = @label_text = text
         def documented(value) = @documented_value = value
         def verified_on(date) = @verified_on_date = Date.parse(date)
+
+        def fidelity(value)
+          unless FIDELITIES.include?(value)
+            raise ArgumentError, "fidelity #{value.inspect} must be one of #{FIDELITIES.join(", ")}"
+          end
+
+          @fidelity_value = value
+        end
 
         def base_dir(default:, env: nil, env_join: nil)
           @base_dir_config = { default: default, env: env, env_join: env_join }
@@ -106,6 +120,58 @@ module AgentSessions
         end
       end
 
+      # Lazily enumerates the primary store (adapters declare it first). Each
+      # consumed session costs one stat plus filename parsing — never a content
+      # read. project_path is the exception and pays for itself on first access.
+      def sessions
+        layers.first.files.lazy.map { |path| build_session(path) }
+      end
+
+      # The cheap path matches the adapter's project encoding against the session
+      # file's parent directory name — no reads (design doc section 7). The
+      # encodings are lossy ("/a_b" and "/a/b" encode identically), which the
+      # design accepts: forward-encoding is exact for real directories, and the
+      # collision case requires two projects that differ only in separator.
+      # Adapters without a rule compare recorded cwds, which reads each file once.
+      def sessions_for_project(dir)
+        dir = File.expand_path(dir)
+        encoded = encode_project(dir)
+        if encoded
+          sessions.select { |session| File.basename(File.dirname(session.path)) == encoded }
+        else
+          sessions.select { |session| session.project_path == dir }
+        end
+      end
+
+      # Distinct recorded project paths. This is the read-everything direction
+      # (design doc section 7): the encodings cannot be reversed, so the recorded
+      # cwd inside each file is the only reliable source. Sessions whose project
+      # cannot be determined are excluded, not returned as nil.
+      def project_paths
+        sessions.map(&:project_path).force.compact.uniq
+      end
+
+      # --- Layer 2 hooks, overridable per adapter ---
+
+      def session_id_from(path)
+        File.basename(path, ".*")
+      end
+
+      # nil means this adapter has no cheap directory-name rule.
+      def encode_project(_dir) = nil
+
+      # nil means the project is unknown for this session. Adapters override
+      # with a bounded read of their own metadata; Base cannot guess.
+      def project_path_for(_path) = nil
+
+      def started_at_for(path)
+        File.birthtime(path)
+      rescue NotImplementedError, Errno::ENOENT
+        nil # some Linux filesystems cannot answer; nil beats a wrong guess
+      end
+
+      def updated_at_for(_path, stat) = stat.mtime
+
       def base_dir
         config = self.class.base_dir_config
         override = presence(config[:env] && @env[config[:env]])
@@ -170,6 +236,39 @@ module AgentSessions
         JSON.parse(File.read(path))
       rescue Errno::ENOENT, Errno::EACCES, Errno::EISDIR, JSON::ParserError
         {}
+      end
+
+      def build_session(path)
+        stat = File.stat(path)
+        Session.new(
+          agent: self.class.agent_name,
+          id: session_id_from(path),
+          path: path,
+          started_at: started_at_for(path),
+          updated_at: updated_at_for(path, stat),
+          bytes: stat.size,
+          format: layers.first.format,
+          fidelity: self.class.fidelity_value
+        ) { project_path_for(path) }
+      end
+
+      # Streams up to `limit` lines looking for a JSON record carrying `key`.
+      # Bounded so a 2.6 GB session file costs a few KB, and tolerant of the
+      # non-JSON or differently-shaped lines real logs contain.
+      def scan_jsonl_for_key(path, key, limit: 25)
+        File.foreach(path).with_index do |line, index|
+          break if index >= limit
+
+          begin
+            record = JSON.parse(line)
+          rescue JSON::ParserError, EncodingError
+            next
+          end
+          return record if record.key?(key)
+        end
+        nil
+      rescue Errno::ENOENT, Errno::EACCES, Errno::EISDIR
+        nil
       end
     end
   end

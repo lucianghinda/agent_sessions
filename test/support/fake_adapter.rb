@@ -5,6 +5,7 @@ class FakeAdapter < AgentSessions::Adapters::Base
   label "Fake Agent"
   documented true
   verified_on "2026-07-01"
+  fidelity :full
 
   base_dir default: "~/.fake", env: "FAKE_HOME"
 

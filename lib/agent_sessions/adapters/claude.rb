@@ -6,7 +6,7 @@ module AgentSessions
       agent :claude
       label "Claude Code"
       documented true
-      verified_on "2026-07-21"
+      verified_on "2026-08-05"
       fidelity :full
 
       base_dir default: "~/.claude", env: "CLAUDE_CONFIG_DIR"
@@ -33,17 +33,32 @@ module AgentSessions
       end
 
       # Every non-alphanumeric character becomes "-" (design doc section 7).
+      # dir must already be absolute and expanded — sessions_for_project
+      # guarantees that; a direct caller passing "app", "~/app", or a
+      # trailing slash gets a nonsense encoding (see Base#encode_project).
       # Verified against real project directories on 2026-08-05:
-      # /Users/luciang/.codex -> -Users-luciang--codex
+      # /Users/dev/.local -> -Users-dev--local
       def encode_project(dir)
         dir.gsub(/[^a-zA-Z0-9]/, "-")
       end
 
-      # cwd is NOT on line 1 — real sessions open with leafUuid/mode/permissionMode
-      # records and the first cwd appeared at line 4 (verified 2026-08-05). The
-      # bounded scan keeps this a few-KB read on multi-GB files.
+      # cwd is NOT on line 1. Real sessions open with a kebab-case preamble
+      # (ai-title, agent-name, mode, permission-mode) followed by a
+      # variable-length run of file-history-snapshot records — that run is
+      # what pushes the first cwd-bearing record out further on some files,
+      # and nothing bounds its length. Observed on this machine on 2026-08-05:
+      # line 3 (19 files), line 4 (48 files), line 9 (1 file, a longer
+      # snapshot run). limit: 25 is ~2.8x that observed maximum — headroom
+      # for the variable-length run, not a tight fit to the common case — and
+      # keeps this a few-KB read even on multi-GB files.
+      #
+      # The block guards against a record that carries "cwd" but not usably:
+      # null shadows a later valid record, and a wrong type (Integer, Hash)
+      # would otherwise reach project_paths' .uniq.sort and raise there.
+      # scan_jsonl_for_key already guarantees the key is present once the
+      # block accepts, so a plain fetch (no default) is safe.
       def project_path_for(path)
-        scan_jsonl_for_key(path, "cwd", limit: 25)&.fetch("cwd", nil)
+        scan_jsonl_for_key(path, "cwd", limit: 25) { |record| record["cwd"].is_a?(String) }&.fetch("cwd")
       end
 
       private

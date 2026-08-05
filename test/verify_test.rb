@@ -120,7 +120,7 @@ class VerifyTest < Minitest::Test
     checks = AgentSessions.doctor(:claude, env: { "HOME" => "/nonexistent" }, today: Date.new(2026, 12, 1))
     staleness = checks.find { |c| c.claim.include?("verified") }
     assert_equal :drift, staleness.status
-    assert_includes staleness.detail, "2026-07-21"
+    assert_includes staleness.detail, "2026-08-05"
   end
 
   def test_doctor_passes_fresh_verification

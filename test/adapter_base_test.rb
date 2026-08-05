@@ -169,6 +169,12 @@ class AdapterBaseTest < Minitest::Test
     assert_includes error.message, "excellent"
   end
 
+  # The probe hook (project_dir_cwd) runs for every distinct directory
+  # regardless of whether an adapter overrides project_path_for — but Base's
+  # default hook is a no-op that returns nil without touching disk, so an
+  # adapter declaring encode_project and nothing else still costs zero
+  # content reads. The probe finding nothing falls back to the name
+  # comparison, which is what actually matches here.
   def test_sessions_for_project_uses_the_encoded_dir_when_the_adapter_has_a_rule
     encoding = Class.new(AgentSessions::Adapters::Base) do
       agent :cheap
@@ -179,14 +185,96 @@ class AdapterBaseTest < Minitest::Test
       store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
 
       def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
-      # No project_path_for: if the cheap path reads file content, this raises.
-      def project_path_for(_path) = raise("cheap path must not read")
     end
 
     with_home do |home, env|
       touch(home, ".cheap", "sessions", "-Users-you-app", "s1.jsonl")
       touch(home, ".cheap", "sessions", "-Users-you-other", "s2.jsonl")
       found = encoding.new(env: env).sessions_for_project("/Users/you/app").force
+      assert_equal ["s1"], found.map(&:id)
+    end
+  end
+
+  # The critical fix (2026-08-05, reproduced against a real Claude store): a
+  # rename leaves an agent still writing under the OLD encoded directory, so
+  # two directories can hold live sessions for the SAME current cwd.
+  # Directory-name matching alone silently drops the stale directory's
+  # sessions — false negatives, decision 11's worst failure mode. Matching
+  # must ask each directory what it actually contains.
+  def test_sessions_for_project_matches_directories_by_probed_cwd_not_by_name
+    renamed = Class.new(AgentSessions::Adapters::Base) do
+      agent :renamed
+      base_dir default: "~/.renamed"
+      store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
+
+      def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
+      def project_path_for(path) = JSON.parse(File.read(path))["cwd"]
+    end
+
+    with_home do |home, env|
+      # Stale, pre-rename directory name — the adapter kept writing here.
+      write('{"cwd":"/Users/you/app"}', home, ".renamed", "sessions", "-Users-you-old-name", "s1.jsonl")
+      write('{"cwd":"/Users/you/app"}', home, ".renamed", "sessions", "-Users-you-old-name", "s2.jsonl")
+      # Current, post-rename directory name.
+      write('{"cwd":"/Users/you/app"}', home, ".renamed", "sessions", "-Users-you-app", "s3.jsonl")
+
+      found = renamed.new(env: env).sessions_for_project("/Users/you/app").force
+      assert_equal %w[s1 s2 s3], found.map(&:id).sort
+    end
+  end
+
+  # The whole point of probing per DIRECTORY rather than per session: cost is
+  # O(project directories), not O(sessions), and stays that way across
+  # repeated calls on the same adapter instance.
+  def test_sessions_for_project_reads_each_directory_at_most_once
+    counting = Class.new(AgentSessions::Adapters::Base) do
+      agent :counting
+      base_dir default: "~/.counting"
+      store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
+
+      attr_reader :probe_count
+
+      def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
+
+      def project_path_for(path)
+        @probe_count = (@probe_count || 0) + 1
+        JSON.parse(File.read(path))["cwd"]
+      end
+    end
+
+    with_home do |home, env|
+      write('{"cwd":"/Users/you/app"}', home, ".counting", "sessions", "-Users-you-old-name", "s1.jsonl")
+      write('{"cwd":"/Users/you/app"}', home, ".counting", "sessions", "-Users-you-old-name", "s2.jsonl")
+      write('{"cwd":"/Users/you/app"}', home, ".counting", "sessions", "-Users-you-old-name", "s3.jsonl")
+      write('{"cwd":"/Users/you/app"}', home, ".counting", "sessions", "-Users-you-app", "s4.jsonl")
+
+      adapter = counting.new(env: env)
+      found = adapter.sessions_for_project("/Users/you/app").force
+      assert_equal 4, found.size
+      assert_equal 2, adapter.probe_count # two distinct directories, not four sessions
+
+      adapter.sessions_for_project("/Users/you/app").force
+      assert_equal 2, adapter.probe_count, "a repeated call must not re-read directories already resolved"
+    end
+  end
+
+  # A directory whose representative session cannot say its cwd (corrupt or
+  # truncated) must not crash and must not match everything — it falls back
+  # to the name comparison, never worse than pre-fix behavior.
+  def test_sessions_for_project_falls_back_to_name_when_the_probe_finds_no_cwd
+    unreadable = Class.new(AgentSessions::Adapters::Base) do
+      agent :unreadable
+      base_dir default: "~/.unreadable"
+      store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
+
+      def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
+      def project_path_for(_path) = nil # e.g. corrupt first session
+    end
+
+    with_home do |home, env|
+      touch(home, ".unreadable", "sessions", "-Users-you-app", "s1.jsonl")
+      touch(home, ".unreadable", "sessions", "-Users-you-other", "s2.jsonl")
+      found = unreadable.new(env: env).sessions_for_project("/Users/you/app").force
       assert_equal ["s1"], found.map(&:id)
     end
   end
@@ -388,10 +476,47 @@ class AdapterBaseTest < Minitest::Test
     assert_nil scan("/no/such/session.jsonl", "cwd")
   end
 
+  # Presence of the key alone is not "found": without a predicate, a null
+  # value still stops the scan and the caller gets a record whose value is
+  # unusable — this is the shadowing bug item 3 of the 2026-08-05 review
+  # caught, reproduced at the shared-helper level so all seven adapters see
+  # the same fix.
+  def test_scan_jsonl_without_a_predicate_stops_at_a_null_valued_key
+    with_home do |home|
+      path = write(%({"cwd":null}\n{"cwd":"/p"}\n), home, "s.jsonl")
+      record = scan(path, "cwd")
+      refute_nil record
+      assert_nil record["cwd"]
+    end
+  end
+
+  def test_scan_jsonl_predicate_skips_a_null_value_and_finds_the_later_record
+    with_home do |home|
+      path = write(%({"cwd":null}\n{"cwd":"/p"}\n), home, "s.jsonl")
+      record = scan(path, "cwd") { |r| r["cwd"].is_a?(String) }
+      assert_equal "/p", record["cwd"]
+    end
+  end
+
+  def test_scan_jsonl_predicate_skips_wrong_typed_values
+    with_home do |home|
+      path = write(%({"cwd":42}\n{"cwd":{"x":1}}\n{"cwd":"/p"}\n), home, "s.jsonl")
+      record = scan(path, "cwd") { |r| r["cwd"].is_a?(String) }
+      assert_equal "/p", record["cwd"]
+    end
+  end
+
+  def test_scan_jsonl_predicate_rejecting_everything_returns_nil
+    with_home do |home|
+      path = write(%({"cwd":1}\n{"cwd":2}\n), home, "s.jsonl")
+      assert_nil scan(path, "cwd") { |r| r["cwd"].is_a?(String) }
+    end
+  end
+
   private
 
   # scan_jsonl_for_key is private — it is an adapter's tool, not a public API.
-  def scan(path, key, **options)
-    FakeAdapter.new(env: {}).send(:scan_jsonl_for_key, path, key, **options)
+  def scan(path, key, **options, &block)
+    FakeAdapter.new(env: {}).send(:scan_jsonl_for_key, path, key, **options, &block)
   end
 end

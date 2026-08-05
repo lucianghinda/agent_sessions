@@ -8,20 +8,16 @@ class ClaudeAdapterTest < Minitest::Test
   def adapter_class = AgentSessions::Adapters::Claude
 
   # Mirrors the real invariant: the project directory name is the encoded cwd
-  # recorded inside the file. Real sessions put the first cwd-bearing record a
-  # few lines in (verified line 4 on 2026-08-05), never on line 1.
+  # recorded inside the file. Real sessions open with a kebab-case preamble
+  # (ai-title, agent-name, mode, permission-mode) followed by a
+  # variable-length run of file-history-snapshot records — the run that makes
+  # project_path_for's scan cap a judgement call rather than a tight fit —
+  # before the first cwd-bearing record appears; never on line 1.
   def build_fixture(home)
-    lines = [
-      { type: "summary", summary: "fixture", leafUuid: "x" },
-      { type: "mode", mode: "default", sessionId: "018f2a7c" },
-      { type: "permissionMode", permissionMode: "default", sessionId: "018f2a7c" },
-      { type: "attachment", cwd: "/Users/you/app", sessionId: "018f2a7c",
-        timestamp: "2026-07-14T09:12:03.000Z" }
-    ]
-    write(lines.map(&JSON.method(:generate)).join("\n"), home, ".claude", "projects", "-Users-you-app", "018f2a7c.jsonl")
+    write_session(home, "-Users-you-app", expected_session_id, "/Users/you/app")
   end
 
-  def expected_session_id = "018f2a7c"
+  def expected_session_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
   def expected_project_path = "/Users/you/app"
 
   def expected_default_path(home) = File.join(home, ".claude", "projects")
@@ -91,28 +87,103 @@ class ClaudeAdapterTest < Minitest::Test
   def test_encode_project_collapses_every_non_alphanumeric_to_a_dash
     adapter = AgentSessions::Adapters::Claude.new(env: { "HOME" => "/h" })
     assert_equal "-Users-you-state-of-mind-til", adapter.encode_project("/Users/you/state_of_mind/til")
-    assert_equal "-Users-luciang--codex", adapter.encode_project("/Users/luciang/.codex")
+    assert_equal "-Users-you--config", adapter.encode_project("/Users/you/.config")
   end
 
-  def test_project_path_survives_junk_lines
+  # Pins the cap rather than leaving it free to regress: mutation-proved, any
+  # value in [4, 30] passed the old suite. cwd on line 25 must still resolve.
+  def test_project_path_resolves_at_the_scan_cap_boundary
     with_home do |home, env|
-      content = "not json at all\n" + JSON.generate({ type: "attachment", cwd: "/Users/you/app" })
-      write(content, home, ".claude", "projects", "-Users-you-app", "aa.jsonl")
+      lines = Array.new(24) { JSON.generate({ type: "file-history-snapshot" }) }
+      lines << JSON.generate({ type: "attachment", cwd: "/Users/you/app" })
+      write("#{lines.join("\n")}\n", home, ".claude", "projects", "-Users-you-app", "cccccccc-0000-4000-8000-000000000001.jsonl")
       session = AgentSessions::Adapters::Claude.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end
 
-  def test_project_path_gives_up_beyond_the_scan_cap
+  # cwd on line 26 — one line past the cap — must not resolve. Paired with
+  # the boundary test above, this is what actually pins 25 rather than
+  # merely being consistent with it.
+  def test_project_path_gives_up_one_line_past_the_scan_cap
     with_home do |home, env|
-      filler = Array.new(30) { JSON.generate({ type: "noise" }) }
-      filler << JSON.generate({ type: "attachment", cwd: "/Users/you/app" })
-      write(filler.join("\n"), home, ".claude", "projects", "-Users-you-app", "bb.jsonl")
-      assert_nil AgentSessions::Adapters::Claude.new(env: env).sessions.first.project_path
+      lines = Array.new(25) { JSON.generate({ type: "file-history-snapshot" }) }
+      lines << JSON.generate({ type: "attachment", cwd: "/Users/you/app" })
+      write("#{lines.join("\n")}\n", home, ".claude", "projects", "-Users-you-app", "dddddddd-0000-4000-8000-000000000002.jsonl")
+      session = AgentSessions::Adapters::Claude.new(env: env).sessions.first
+      assert_nil session.project_path
     end
   end
 
   def test_fidelity_is_full
     assert_equal :full, AgentSessions::Adapters::Claude.fidelity_value
+  end
+
+  # A record carrying "cwd": null must not shadow a later, usable record —
+  # the presence-only scan stops right there and project_path is
+  # permanently nil for the session, which is what item 3 of the review
+  # (2026-08-05) caught.
+  def test_project_path_skips_a_null_cwd_and_finds_the_real_one
+    with_home do |home, env|
+      content = "#{JSON.generate({ type: "attachment", cwd: nil })}\n" \
+                "#{JSON.generate({ type: "attachment", cwd: "/Users/you/app" })}\n"
+      write(content, home, ".claude", "projects", "-Users-you-app", "eeeeeeee-0000-4000-8000-000000000003.jsonl")
+      session = AgentSessions::Adapters::Claude.new(env: env).sessions.first
+      assert_equal "/Users/you/app", session.project_path
+    end
+  end
+
+  # Without the type guard, "cwd": 42 or "cwd": {...} would reach
+  # project_paths' .uniq.sort and raise ArgumentError from one malformed
+  # record — a crash in `projects` caused by a single bad session.
+  def test_project_paths_excludes_malformed_cwd_types_instead_of_crashing
+    with_home do |home, env|
+      write(JSON.generate({ type: "attachment", cwd: 42 }), home, ".claude", "projects", "-Users-you-int", "ffffffff-0000-4000-8000-000000000004.jsonl")
+      write(JSON.generate({ type: "attachment", cwd: { "nested" => true } }), home, ".claude", "projects", "-Users-you-hash",
+            "11111111-0000-4000-8000-000000000005.jsonl")
+      build_fixture(home)
+      paths = AgentSessions::Adapters::Claude.new(env: env).project_paths
+      assert_equal [expected_project_path], paths
+    end
+  end
+
+  # The critical fix (2026-08-05, reproduced against this machine's real
+  # store): a rename leaves Claude still writing under the OLD encoded
+  # directory, so two directories hold live sessions for the SAME current
+  # cwd. Matching by directory name alone silently drops the stale
+  # directory's sessions; matching by what each directory's sessions
+  # actually record does not.
+  def test_sessions_for_project_finds_sessions_left_under_a_renamed_directory
+    with_home do |home, env|
+      # Stale, pre-rename directory name — Claude kept writing here.
+      write_session(home, "-Users-you-review-hunk-changes", "22222222-0000-4000-8000-000000000006", "/Users/you/hunk-review-changes")
+      write_session(home, "-Users-you-review-hunk-changes", "33333333-0000-4000-8000-000000000007", "/Users/you/hunk-review-changes")
+      # Current, post-rename directory name.
+      write_session(home, "-Users-you-hunk-review-changes", "44444444-0000-4000-8000-000000000008", "/Users/you/hunk-review-changes")
+      # An unrelated project must not be swept in.
+      write_session(home, "-Users-you-other", "55555555-0000-4000-8000-000000000009", "/Users/you/other")
+
+      found = AgentSessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/hunk-review-changes").force
+      assert_equal %w[22222222-0000-4000-8000-000000000006 33333333-0000-4000-8000-000000000007
+                      44444444-0000-4000-8000-000000000008], found.map(&:id).sort
+    end
+  end
+
+  private
+
+  # Builds a realistically-shaped session file: kebab-case preamble records, a
+  # file-history-snapshot (the variable-length run project_path_for's comment
+  # explains), then the first cwd-bearing record — never on line 1.
+  def write_session(home, dir_name, session_id, cwd)
+    lines = [
+      { type: "ai-title", title: "fixture session", sessionId: session_id },
+      { type: "agent-name", agentName: "claude", sessionId: session_id },
+      { type: "mode", mode: "default", sessionId: session_id },
+      { type: "permission-mode", permissionMode: "default", sessionId: session_id },
+      { type: "file-history-snapshot", sessionId: session_id, snapshot: {} },
+      { type: "attachment", cwd: cwd, sessionId: session_id, timestamp: "2026-07-14T09:12:03.000Z" }
+    ]
+    content = "#{lines.map { JSON.generate(it) }.join("\n")}\n"
+    write(content, home, ".claude", "projects", dir_name, "#{session_id}.jsonl")
   end
 end

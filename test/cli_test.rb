@@ -38,7 +38,7 @@ class CLITest < Minitest::Test
       payload = JSON.parse(out)
       assert_equal "claude", payload.first.fetch("agent")
       assert_equal File.join(home, ".claude", "projects"), payload.first.dig("effective", "path")
-      assert_equal "2026-07-21", payload.first.fetch("verified_on")
+      assert_equal "2026-08-05", payload.first.fetch("verified_on")
     end
   end
 

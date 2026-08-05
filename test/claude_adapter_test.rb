@@ -153,11 +153,21 @@ class ClaudeAdapterTest < Minitest::Test
   # cwd. Matching by directory name alone silently drops the stale
   # directory's sessions; matching by what each directory's sessions
   # actually record does not.
+  # The stale directory is itself heterogeneous, mirroring what was found on
+  # the real store: two of its sessions were resumed after the rename and
+  # record the NEW cwd, one was never resumed and still records the OLD cwd
+  # matching its own directory name. Matching by each session's own recorded
+  # cwd finds the two resumed sessions and the fresh post-rename session,
+  # and excludes the stale one on its own merits — no false positive from a
+  # directory-level verdict.
   def test_sessions_for_project_finds_sessions_left_under_a_renamed_directory
     with_home do |home, env|
       # Stale, pre-rename directory name — Claude kept writing here.
       write_session(home, "-Users-you-review-hunk-changes", "22222222-0000-4000-8000-000000000006", "/Users/you/hunk-review-changes")
       write_session(home, "-Users-you-review-hunk-changes", "33333333-0000-4000-8000-000000000007", "/Users/you/hunk-review-changes")
+      # Same stale directory, never resumed — still records the OLD cwd and
+      # must NOT be returned.
+      write_session(home, "-Users-you-review-hunk-changes", "66666666-0000-4000-8000-00000000000a", "/Users/you/review-hunk-changes")
       # Current, post-rename directory name.
       write_session(home, "-Users-you-hunk-review-changes", "44444444-0000-4000-8000-000000000008", "/Users/you/hunk-review-changes")
       # An unrelated project must not be swept in.
@@ -166,6 +176,19 @@ class ClaudeAdapterTest < Minitest::Test
       found = AgentSessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/hunk-review-changes").force
       assert_equal %w[22222222-0000-4000-8000-000000000006 33333333-0000-4000-8000-000000000007
                       44444444-0000-4000-8000-000000000008], found.map(&:id).sort
+    end
+  end
+
+  # A session whose header carries no readable cwd at all still needs to be
+  # findable — it falls back to comparing its own directory's name, which is
+  # the only thing encode_project still buys now that matching is exact.
+  def test_sessions_for_project_falls_back_to_directory_name_when_cwd_is_unreadable
+    with_home do |home, env|
+      filler = Array.new(30) { JSON.generate({ type: "file-history-snapshot" }) } # no cwd anywhere — unreadable
+      write("#{filler.join("\n")}\n", home, ".claude", "projects", "-Users-you-app", "77777777-0000-4000-8000-00000000000b.jsonl")
+
+      found = AgentSessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/app").force
+      assert_equal ["77777777-0000-4000-8000-00000000000b"], found.map(&:id)
     end
   end
 

@@ -169,12 +169,10 @@ class AdapterBaseTest < Minitest::Test
     assert_includes error.message, "excellent"
   end
 
-  # The probe hook (project_dir_cwd) runs for every distinct directory
-  # regardless of whether an adapter overrides project_path_for — but Base's
-  # default hook is a no-op that returns nil without touching disk, so an
-  # adapter declaring encode_project and nothing else still costs zero
-  # content reads. The probe finding nothing falls back to the name
-  # comparison, which is what actually matches here.
+  # The name-fallback only fires for a session whose own cwd could not be
+  # read. Base's default project_path_for is a no-op that returns nil without
+  # touching disk, so this adapter's every session hits the fallback, and
+  # still costs zero content reads.
   def test_sessions_for_project_uses_the_encoded_dir_when_the_adapter_has_a_rule
     encoding = Class.new(AgentSessions::Adapters::Base) do
       agent :cheap
@@ -198,10 +196,14 @@ class AdapterBaseTest < Minitest::Test
   # The critical fix (2026-08-05, reproduced against a real Claude store): a
   # rename leaves an agent still writing under the OLD encoded directory, so
   # two directories can hold live sessions for the SAME current cwd.
-  # Directory-name matching alone silently drops the stale directory's
-  # sessions — false negatives, decision 11's worst failure mode. Matching
-  # must ask each directory what it actually contains.
-  def test_sessions_for_project_matches_directories_by_probed_cwd_not_by_name
+  # Directory-name matching alone silently dropped the stale directory's
+  # sessions — false negatives, decision 11's worst failure mode. Matching by
+  # each session's OWN recorded cwd finds them regardless of which directory
+  # they physically sit in — including a directory that is itself
+  # heterogeneous (two sessions resumed post-rename recording the NEW cwd,
+  # one never resumed and still recording the OLD cwd): the stale one must
+  # be excluded on its own merits, not swept in by a directory-level verdict.
+  def test_sessions_for_project_matches_by_recorded_cwd_regardless_of_directory_name
     renamed = Class.new(AgentSessions::Adapters::Base) do
       agent :renamed
       base_dir default: "~/.renamed"
@@ -215,60 +217,27 @@ class AdapterBaseTest < Minitest::Test
       # Stale, pre-rename directory name — the adapter kept writing here.
       write('{"cwd":"/Users/you/app"}', home, ".renamed", "sessions", "-Users-you-old-name", "s1.jsonl")
       write('{"cwd":"/Users/you/app"}', home, ".renamed", "sessions", "-Users-you-old-name", "s2.jsonl")
+      # Same stale directory, but never resumed — still records the OLD cwd.
+      write('{"cwd":"/Users/you/old-name"}', home, ".renamed", "sessions", "-Users-you-old-name", "s3.jsonl")
       # Current, post-rename directory name.
-      write('{"cwd":"/Users/you/app"}', home, ".renamed", "sessions", "-Users-you-app", "s3.jsonl")
+      write('{"cwd":"/Users/you/app"}', home, ".renamed", "sessions", "-Users-you-app", "s4.jsonl")
 
       found = renamed.new(env: env).sessions_for_project("/Users/you/app").force
-      assert_equal %w[s1 s2 s3], found.map(&:id).sort
+      assert_equal %w[s1 s2 s4], found.map(&:id).sort
     end
   end
 
-  # The whole point of probing per DIRECTORY rather than per session: cost is
-  # O(project directories), not O(sessions), and stays that way across
-  # repeated calls on the same adapter instance.
-  def test_sessions_for_project_reads_each_directory_at_most_once
-    counting = Class.new(AgentSessions::Adapters::Base) do
-      agent :counting
-      base_dir default: "~/.counting"
-      store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
-
-      attr_reader :probe_count
-
-      def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
-
-      def project_path_for(path)
-        @probe_count = (@probe_count || 0) + 1
-        JSON.parse(File.read(path))["cwd"]
-      end
-    end
-
-    with_home do |home, env|
-      write('{"cwd":"/Users/you/app"}', home, ".counting", "sessions", "-Users-you-old-name", "s1.jsonl")
-      write('{"cwd":"/Users/you/app"}', home, ".counting", "sessions", "-Users-you-old-name", "s2.jsonl")
-      write('{"cwd":"/Users/you/app"}', home, ".counting", "sessions", "-Users-you-old-name", "s3.jsonl")
-      write('{"cwd":"/Users/you/app"}', home, ".counting", "sessions", "-Users-you-app", "s4.jsonl")
-
-      adapter = counting.new(env: env)
-      found = adapter.sessions_for_project("/Users/you/app").force
-      assert_equal 4, found.size
-      assert_equal 2, adapter.probe_count # two distinct directories, not four sessions
-
-      adapter.sessions_for_project("/Users/you/app").force
-      assert_equal 2, adapter.probe_count, "a repeated call must not re-read directories already resolved"
-    end
-  end
-
-  # A directory whose representative session cannot say its cwd (corrupt or
-  # truncated) must not crash and must not match everything — it falls back
-  # to the name comparison, never worse than pre-fix behavior.
-  def test_sessions_for_project_falls_back_to_name_when_the_probe_finds_no_cwd
+  # A session whose own cwd cannot be read (corrupt or truncated) must not
+  # crash and must not match everything — it falls back to comparing ITS OWN
+  # directory's name, never worse than pre-fix behavior.
+  def test_sessions_for_project_falls_back_to_name_when_a_sessions_own_cwd_is_unreadable
     unreadable = Class.new(AgentSessions::Adapters::Base) do
       agent :unreadable
       base_dir default: "~/.unreadable"
       store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
 
       def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
-      def project_path_for(_path) = nil # e.g. corrupt first session
+      def project_path_for(_path) = nil # e.g. corrupt session file
     end
 
     with_home do |home, env|
@@ -276,6 +245,36 @@ class AdapterBaseTest < Minitest::Test
       touch(home, ".unreadable", "sessions", "-Users-you-other", "s2.jsonl")
       found = unreadable.new(env: env).sessions_for_project("/Users/you/app").force
       assert_equal ["s1"], found.map(&:id)
+    end
+  end
+
+  # Exact per-session matching reads every session it checks — the design
+  # accepts that cost (measured negligible, see sessions_for_project's
+  # comment) on the strength of staying lazy: a caller that stops early must
+  # not pay for sessions it never asked about.
+  def test_sessions_for_project_first_stops_early_without_reading_every_session
+    counting = Class.new(AgentSessions::Adapters::Base) do
+      agent :lazycount
+      base_dir default: "~/.lazycount"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      attr_reader :read_count
+
+      def project_path_for(path)
+        @read_count = (@read_count || 0) + 1
+        JSON.parse(File.read(path))["cwd"]
+      end
+    end
+
+    with_home do |home, env|
+      write('{"cwd":"/Users/you/app"}', home, ".lazycount", "sessions", "s1.jsonl")
+      write('{"cwd":"/Users/you/other"}', home, ".lazycount", "sessions", "s2.jsonl")
+      write('{"cwd":"/Users/you/other"}', home, ".lazycount", "sessions", "s3.jsonl")
+
+      adapter = counting.new(env: env)
+      found = adapter.sessions_for_project("/Users/you/app").first(1)
+      assert_equal ["s1"], found.map(&:id)
+      assert_equal 1, adapter.read_count, "first(1) must not read sessions past the first match"
     end
   end
 

@@ -145,49 +145,61 @@ module AgentSessions
         primary_layer.files.lazy.filter_map { |path| build_session(path) }
       end
 
-      # The cheap path matches project directories by what they RECORD, not by
-      # what they are NAMED (design doc section 7, revised 2026-08-05). The
-      # false assumption was never "the encoding is lossy" — that was already
-      # accepted, and it only yields false positives (two projects differing
-      # solely in separator). The real, unstated assumption was "a session's
-      # parent directory equals encode(its own recorded cwd)", and a project
-      # rename breaks it: the agent keeps writing under the OLD encoded
-      # directory, so two directories can hold live sessions for the SAME
-      # current cwd, and name-only matching silently drops the stale one —
-      # false negatives, the failure mode this gem treats as worst (decision
-      # 11), reproduced against this machine's real store.
+      # Match by RECORDED cwd, exact, per session (design doc section 7,
+      # revised 2026-08-05 — the third design for this method, kept honest
+      # here because the next reader deserves to know why it is not "cheap").
+      # The first two designs were built and disproved against a real store,
+      # not in theory:
       #
-      # What a directory's OWN sessions record as their cwd stays correct
-      # across a rename, so the match reads one representative session per
-      # distinct directory and memoizes the result: O(project directories),
-      # not O(sessions) — 45 reads instead of 4,000 on this machine, and it
-      # stays sublinear as session counts grow. It also stays lazy — no
-      # directory is probed until a session belonging to it is walked, and a
-      # directory already resolved is never re-read even across repeated
-      # calls (see project_dir_cwd).
+      #   1. Directory-name matching (the original design) assumed a
+      #      session's parent directory equals encode(its own recorded cwd).
+      #      A project rename breaks that: the agent keeps writing under the
+      #      OLD encoded directory, so two directories can hold live sessions
+      #      for the SAME current cwd, and name-only matching silently
+      #      dropped the stale one — false negatives, the failure mode this
+      #      gem treats as worst (decision 11).
       #
-      # A directory whose probe session yields no cwd (corrupt/truncated first
-      # file) is unknown, not a match for everything: it falls back to
-      # comparing that directory's name against the encoding — never worse
-      # than pre-fix behavior. Union-of-both-signals and fallback-only-when-
-      # the-whole-directory-is-empty were both considered and rejected: union
-      # pays the full sweep this fix exists to avoid, and fallback-when-empty
-      # does not fire in the observed case, which returns one match rather
-      # than zero.
+      #   2. One-read-per-directory sampling (the first fix for #1) assumed
+      #      sessions within a directory share a cwd, to keep the match
+      #      sublinear. Reading a real renamed project's stale directory
+      #      disproved that: two of its three sessions had been resumed after
+      #      the rename and recorded the NEW cwd; the third was never resumed
+      #      and still recorded the OLD one. Sampling one session and
+      #      applying its verdict to the whole directory is wrong in BOTH
+      #      directions on the same store — it invented a false positive
+      #      here, and a different glob order would just as easily have
+      #      reproduced #1's false negative for that same directory.
+      #      Approximate cwd resolution doesn't make the error smaller; it
+      #      just moves where it lands.
       #
-      # Adapters without a rule (encode_project returns nil) have no cheap
-      # grouping and compare recorded cwds session by session, reading every
-      # file once.
+      # Measured cost of reading every session instead of sampling: 0.17 ms
+      # per session (68 real Claude sessions, full sweep, 0.012s total) — 0.7s
+      # extrapolated to a 4,000-session store. That is what the sampling
+      # complexity was buying, and it is not a trade worth making: the
+      # enumerator is already lazy, so a caller taking first(n) never pays
+      # for sessions it never asked about, and even the worst case (every
+      # session checked, no match) stays under a second on a store two
+      # orders of magnitude larger than anything observed.
+      #
+      # A session whose own cwd cannot be read (the scan gave up, the file is
+      # unreadable, the adapter declares no reader) falls back to comparing
+      # ITS OWN directory's name against the encoding, when the adapter
+      # declares one — this is the only thing encode_project still buys: it
+      # keeps a session with an unreadable header from becoming invisible,
+      # without resolving an unknown project for every other session that
+      # happens to share its directory.
       def sessions_for_project(dir)
         dir = File.expand_path(dir)
         encoded = encode_project(dir)
-        if encoded
-          sessions.select { |session| project_dir_matches?(session, dir, encoded) }
-        else
+        sessions.select do |session|
           # expand_path does not resolve symlinks, so a cwd recorded as
-          # /private/tmp/x will not match a caller's /tmp/x on macOS. Deliberate:
-          # realpath would cost a stat per comparison to fix a rare mismatch.
-          sessions.select { |session| session.project_path == dir }
+          # /private/tmp/x will not match a caller's /tmp/x on macOS.
+          # Deliberate: realpath would cost a stat per comparison to fix a
+          # rare mismatch.
+          cwd = session.project_path
+          next cwd == dir unless cwd.nil?
+
+          encoded && project_dir_name(session.path) == encoded
         end
       end
 
@@ -209,21 +221,21 @@ module AgentSessions
         File.basename(path, ".*")
       end
 
-      # nil means this adapter has no cheap directory-name rule. When
-      # overridden: dir arrives pre-expanded here from sessions_for_project
-      # (File.expand_path), which is the precondition an override may rely on
-      # — a direct caller must pass an absolute, expanded path itself, or the
-      # encoding is nonsense ("app", "~/app", and a trailing slash all encode
-      # differently from the canonical form real project directories were
-      # named from).
+      # nil means this adapter has no directory-name fallback rule. Used only
+      # by sessions_for_project, and only for a session whose own recorded
+      # cwd could not be read. When overridden: dir arrives pre-expanded here
+      # from sessions_for_project (File.expand_path), which is the
+      # precondition an override may rely on — a direct caller must pass an
+      # absolute, expanded path itself, or the encoding is nonsense ("app",
+      # "~/app", and a trailing slash all encode differently from the
+      # canonical form real project directories were named from).
       def encode_project(_dir) = nil
 
-      # The directory whose name the encoding must match. Overridable: not every
-      # store puts the encoded project directly above the session file — cursor_ide
-      # nests projects/<name>/agent-transcripts/*, where the immediate parent is
-      # agent-transcripts and matching it would find nothing, silently. Also the
-      # key project_dir_cwd memoizes the rename-fix probe against: one project
-      # directory, one cache entry.
+      # The directory whose name the encoding must match, when
+      # sessions_for_project falls back to it. Overridable: not every store
+      # puts the encoded project directly above the session file — cursor_ide
+      # nests projects/<name>/agent-transcripts/*, where the immediate parent
+      # is agent-transcripts and matching it would find nothing, silently.
       def project_dir_name(path) = File.basename(File.dirname(path))
 
       # nil means the project is unknown for this session. Adapters override
@@ -269,27 +281,6 @@ module AgentSessions
 
       # The store sessions live in. Adapters declare it first, by convention.
       def primary_layer = layers.first
-
-      # True when session's project directory is a match for dir/encoded.
-      # Prefers the directory's actual recorded cwd (resolved at most once —
-      # see project_dir_cwd) and only falls back to the name comparison when
-      # that directory has nothing to say.
-      def project_dir_matches?(session, dir, encoded)
-        dir_name = project_dir_name(session.path)
-        cwd = project_dir_cwd(dir_name, session.path)
-        cwd ? cwd == dir : dir_name == encoded
-      end
-
-      # Memoized per directory name, not per session: a directory holding a
-      # thousand sessions still costs one read. Hash#fetch's block runs only on
-      # a first visit; storing the result inside the block (rather than relying
-      # on fetch to do it) is what makes a nil probe result stick too, so a
-      # directory whose representative session cannot say its cwd is not
-      # retried on every other session that shares it.
-      def project_dir_cwd(dir_name, sample_session_path)
-        @project_dir_cwds ||= {}
-        @project_dir_cwds.fetch(dir_name) { @project_dir_cwds[dir_name] = project_path_for(sample_session_path) }
-      end
 
       # single_file is a property of the declaration, not of the resolved path: a
       # store-level env override replaces where the layer lives without changing

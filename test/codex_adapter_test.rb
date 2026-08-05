@@ -7,9 +7,20 @@ class CodexAdapterTest < Minitest::Test
 
   def adapter_class = AgentSessions::Adapters::Codex
 
+  # Real filename shape, verified 2026-08-05:
+  # rollout-2026-03-28T18-00-42-019d352d-1d88-7ed3-b0cc-dfab5f37ecd9.jsonl
+  # Line 1 is session_meta with payload.cwd.
+  FIXTURE_UUID = "019d352d-1d88-7ed3-b0cc-dfab5f37ecd9"
+
   def build_fixture(home)
-    touch(home, ".codex", "sessions", "2026", "07", "21", "rollout-2026-07-21-abc.jsonl")
+    meta = { type: "session_meta", timestamp: "2026-07-21T06:16:25.064Z",
+             payload: { id: FIXTURE_UUID, cwd: "/Users/you/app", cli_version: "0.0.0" } }
+    write(JSON.generate(meta), home, ".codex", "sessions", "2026", "07", "21",
+          "rollout-2026-07-21T09-12-03-#{FIXTURE_UUID}.jsonl")
   end
+
+  def expected_session_id = FIXTURE_UUID
+  def expected_project_path = "/Users/you/app"
 
   def expected_default_path(home) = File.join(home, ".codex", "sessions")
 
@@ -27,6 +38,88 @@ class CodexAdapterTest < Minitest::Test
     with_home do |_home, env|
       store = AgentSessions.locate(:codex, env: env)
       assert(store.warnings.any? { |w| w.include?("history.jsonl") })
+    end
+  end
+
+  def test_started_at_comes_from_the_filename_not_a_read
+    with_home do |home, env|
+      build_fixture(home)
+      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      assert_equal Time.new(2026, 7, 21, 9, 12, 3), session.started_at
+    end
+  end
+
+  def test_unrecognized_filenames_fall_back_to_the_basename
+    with_home do |home, env|
+      write("{}", home, ".codex", "sessions", "2026", "07", "21", "rollout-weird.jsonl")
+      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      assert_equal "rollout-weird", session.id
+    end
+  end
+
+  def test_fidelity_is_full
+    assert_equal :full, AgentSessions::Adapters::Codex.fidelity_value
+  end
+
+  # Pins the cap rather than leaving it free to regress. Real data (360 files,
+  # verified 2026-08-05) puts session_meta on line 1 in every case, so 3 is
+  # slack, not a tight fit — this proves the slack is exactly 3, not 2 or 4.
+  # Filler lines omit "payload" entirely so scan_jsonl_for_key's key-presence
+  # check, not the predicate, is what advances the scan.
+  def test_project_path_resolves_at_the_scan_cap_boundary
+    with_home do |home, env|
+      filler = Array.new(2) { JSON.generate({ type: "event_msg" }) }
+      target = JSON.generate({ type: "session_meta", payload: { cwd: "/Users/you/app" } })
+      write("#{(filler + [target]).join("\n")}\n", home, ".codex", "sessions", "2026", "07", "21",
+            "rollout-2026-07-21T09-12-03-00000000-0000-4000-8000-000000000001.jsonl")
+      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      assert_equal "/Users/you/app", session.project_path
+    end
+  end
+
+  # session_meta on line 4 — one line past the cap — must not resolve. Paired
+  # with the boundary test above, this is what actually pins 3 rather than
+  # merely being consistent with it.
+  def test_project_path_gives_up_one_line_past_the_scan_cap
+    with_home do |home, env|
+      filler = Array.new(3) { JSON.generate({ type: "event_msg" }) }
+      target = JSON.generate({ type: "session_meta", payload: { cwd: "/Users/you/app" } })
+      write("#{(filler + [target]).join("\n")}\n", home, ".codex", "sessions", "2026", "07", "21",
+            "rollout-2026-07-21T09-12-03-00000000-0000-4000-8000-000000000002.jsonl")
+      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      assert_nil session.project_path
+    end
+  end
+
+  # Real sessions on this machine (verified 2026-08-05) showed a later
+  # turn_context record ALSO carrying a "payload" key whose value itself
+  # carries "cwd" — a presence-only scan for "payload" would stop at whichever
+  # of these comes first, which is only ever right by coincidence. The
+  # predicate requires type == "session_meta" specifically, per design doc
+  # 8.2: that is the one documented source of truth, not any record that
+  # happens to shape its payload the same way.
+  def test_project_path_ignores_a_payload_bearing_record_that_is_not_session_meta
+    with_home do |home, env|
+      content = "#{JSON.generate({ type: "turn_context", payload: { cwd: "/Users/you/decoy" } })}\n" \
+                "#{JSON.generate({ type: "session_meta", payload: { cwd: "/Users/you/app" } })}\n"
+      write(content, home, ".codex", "sessions", "2026", "07", "21",
+            "rollout-2026-07-21T09-12-03-00000000-0000-4000-8000-000000000003.jsonl")
+      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      assert_equal "/Users/you/app", session.project_path
+    end
+  end
+
+  # A session_meta whose payload is malformed (not a Hash, or cwd not a
+  # String) must not shadow a later, usable session_meta, and must not raise.
+  def test_project_path_skips_a_malformed_session_meta_and_finds_a_usable_one
+    with_home do |home, env|
+      content = "#{JSON.generate({ type: "session_meta", payload: "not-a-hash" })}\n" \
+                "#{JSON.generate({ type: "session_meta", payload: { cwd: 42 } })}\n" \
+                "#{JSON.generate({ type: "session_meta", payload: { cwd: "/Users/you/app" } })}\n"
+      write(content, home, ".codex", "sessions", "2026", "07", "21",
+            "rollout-2026-07-21T09-12-03-00000000-0000-4000-8000-000000000004.jsonl")
+      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      assert_equal "/Users/you/app", session.project_path
     end
   end
 end

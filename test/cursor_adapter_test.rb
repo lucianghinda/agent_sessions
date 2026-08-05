@@ -7,9 +7,18 @@ class CursorAdapterTest < Minitest::Test
 
   def adapter_class = AgentSessions::Adapters::Cursor
 
+  # store.db content is an undocumented blob (design doc 8.3) — Layer 2 never
+  # opens it. The sibling meta.json carries the metadata. Field names are from
+  # the design doc, UNVERIFIED on this machine (no ~/.cursor/chats here).
   def build_fixture(home)
     write("", home, ".cursor", "chats", "chat-1", "0192-uuid", "store.db")
+    meta = { schemaVersion: 1, createdAtMs: 1_752_484_323_000,
+             updatedAtMs: 1_752_490_000_000, cwd: "/Users/you/app", title: "fixture" }
+    write(JSON.generate(meta), home, ".cursor", "chats", "chat-1", "0192-uuid", "meta.json")
   end
+
+  def expected_session_id = "chat-1/0192-uuid"
+  def expected_project_path = "/Users/you/app"
 
   def expected_default_path(home) = File.join(home, ".cursor", "chats")
 
@@ -26,6 +35,141 @@ class CursorAdapterTest < Minitest::Test
     store = AgentSessions.locate(:cursor, env: { "HOME" => "/h", "XDG_CONFIG_HOME" => "/xdg/config" })
     assert_equal "/h/.cursor/chats", store.effective.path
   end
+
+  def test_timestamps_come_from_meta_json
+    with_home do |home, env|
+      build_fixture(home)
+      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.first
+      assert_equal Time.at(1_752_484_323_000 / 1000.0), session.started_at
+      assert_equal Time.at(1_752_490_000_000 / 1000.0), session.updated_at
+    end
+  end
+
+  def test_missing_meta_json_falls_back_to_stat
+    with_home do |home, env|
+      db = write("", home, ".cursor", "chats", "chat-2", "u2", "store.db")
+      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.first
+      assert_equal File.mtime(db), session.updated_at
+      assert_nil session.project_path
+    end
+  end
+
+  def test_fidelity_is_metadata
+    assert_equal :metadata, AgentSessions::Adapters::Cursor.fidelity_value
+  end
+
+  # --- Malformed-shape guards -------------------------------------------------
+  # Mirrors Amp's own section by the same name: presence of a key is not a
+  # usable value (rule 1), and the container holding it needs its type
+  # checked too, not just the leaf (rule 2). meta_for centralizes both checks
+  # for all three readers (started_at_for, updated_at_for, project_path_for),
+  # so one fixture per case here is enough to pin all of them at once rather
+  # than tripling the fixtures the way project_path_for-only coverage would.
+
+  def test_project_path_is_nil_when_meta_json_is_not_an_object
+    with_home do |home, env|
+      write("", home, ".cursor", "chats", "chat-array", "u", "store.db")
+      write(JSON.generate([1, 2, 3]), home, ".cursor", "chats", "chat-array", "u", "meta.json")
+      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-array/u" }
+      assert_nil session.project_path
+    end
+  end
+
+  def test_project_path_is_nil_when_cwd_is_not_a_string
+    with_home do |home, env|
+      write("", home, ".cursor", "chats", "chat-int-cwd", "u", "store.db")
+      write(JSON.generate({ cwd: 42 }), home, ".cursor", "chats", "chat-int-cwd", "u", "meta.json")
+      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-int-cwd/u" }
+      assert_nil session.project_path
+    end
+  end
+
+  # createdAtMs: 1e400 is valid JSON (an in-range exponent literal) that
+  # overflows Ruby's Float to Infinity at parse time, not at read time —
+  # Time.at(Float::INFINITY) raises FloatDomainError, uncaught, which is
+  # rule 3's failure mode: one bad timestamp taking every agent's listing
+  # down, not just this session's. Pins meta_time's post-division finite?
+  # check rather than a pre-division check on millis alone (see the comment
+  # on meta_time): millis itself is a valid, finite Integer here, and only
+  # overflows once divided by 1000.0.
+  def test_started_at_falls_back_to_stat_when_created_at_ms_overflows_to_infinity
+    with_home do |home, env|
+      db = write("", home, ".cursor", "chats", "chat-huge", "u", "store.db")
+      # Written as raw text, not JSON.generate({ createdAtMs: 1e400 }): the Ruby
+      # Float literal 1e400 is ALREADY Infinity by the time Ruby parses this
+      # source file, and JSON.generate refuses to serialize Infinity at all
+      # (GeneratorError). The on-disk case this test pins is different: the
+      # bytes on disk are the finite-looking text "1e400", and it is JSON.parse
+      # — not this test file's own Ruby source — that overflows it to Infinity.
+      write('{"createdAtMs": 1e400}', home, ".cursor", "chats", "chat-huge", "u", "meta.json")
+      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-huge/u" }
+      assert_equal base_started_at(session), session.started_at
+      assert_equal File.mtime(db), session.updated_at
+    end
+  end
+
+  # A JSON integer literal hundreds of digits long parses as an exact Ruby
+  # Integer (is_a?(Numeric) holds, finite? holds — Integers have no Infinity)
+  # and only overflows once `/ 1000.0` forces it through Float. Same crash,
+  # different route than the Float-literal case above; kept as its own test
+  # because millis.finite? alone would have let this one through.
+  def test_started_at_falls_back_to_stat_when_created_at_ms_is_a_huge_integer
+    with_home do |home, env|
+      db = write("", home, ".cursor", "chats", "chat-bignum", "u", "store.db")
+      write(JSON.generate({ createdAtMs: 10**400 }), home, ".cursor", "chats", "chat-bignum", "u", "meta.json")
+      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-bignum/u" }
+      assert_equal base_started_at(session), session.started_at
+      assert_equal File.mtime(db), session.updated_at
+    end
+  end
+
+  # Pins the OTHER half of meta_time's guard chain: is_a?(Numeric) rejects a
+  # wrong-typed value before the division that the two overflow tests above
+  # exercise ever runs. A String intermediate would not raise here even
+  # unguarded ("not-a-number" / 1000.0 raises NoMethodError, which IS a
+  # raise — so this is still load-bearing, just via a different exception
+  # than the TypeError/FloatDomainError the other guards catch).
+  def test_started_at_falls_back_to_stat_when_created_at_ms_is_not_numeric
+    with_home do |home, env|
+      db = write("", home, ".cursor", "chats", "chat-str", "u", "store.db")
+      write(JSON.generate({ createdAtMs: "not-a-number" }), home, ".cursor", "chats", "chat-str", "u", "meta.json")
+      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-str/u" }
+      assert_equal base_started_at(session), session.started_at
+      assert_equal File.mtime(db), session.updated_at
+    end
+  end
+
+  # --- session_id_from's path-depth assumption --------------------------------
+  # Not opted into the shared filename-parsing conformance (test/support/
+  # adapter_conformance.rb): that module's two tests both write a SIBLING
+  # file into the fixture's own directory under a different basename, relying
+  # on the adapter's own glob to pick it up so the enumerator actually sees
+  # two sessions. Cursor's glob is "chats/*/*/store.db" — the wildcards are
+  # both DIRECTORY segments; the filename itself is the literal string
+  # "store.db", not a pattern. Dir.glob confirms a sibling under any other
+  # name is invisible to it (verified: only "store.db" itself matches, a file
+  # named e.g. "rollout-2026-13-21T09-12-03-x.jsonl" written next to it does
+  # not appear in the glob's results at all). So malformed_date_filename and
+  # unmatched_filename cannot be defined here the way pi's and Codex's are:
+  # either fixture would make test_conformance_a_malformed_date_filename_...
+  # and test_conformance_unrecognized_filename_falls_back_to_the_basename
+  # fail outright (sessions.size stays 1, not the 2 those tests assert),
+  # not skip — the fixture the shared harness needs is one this store's own
+  # declaration cannot produce.
+  #
+  # That is also why "a filename Cursor doesn't recognize" isn't quite the
+  # right question for this adapter in the first place: session_id_from
+  # parses ENCLOSING DIRECTORY names, not the (fixed) filename, and never
+  # falls back to a basename the way pi/Codex/Base do — there is no `super`
+  # call in it. What the shared tests are really standing in for — "a
+  # surprising path must not crash the hook, and must not crash the listing"
+  # — is tested directly below instead, against the actual assumption this
+  # hook makes (two directory segments), by calling the hook rather than
+  # routing through the (structurally incapable of producing this) glob.
+  def test_session_id_from_does_not_raise_for_a_shallow_path
+    adapter = AgentSessions::Adapters::Cursor.new(env: { "HOME" => "/h" })
+    assert_equal "///", adapter.session_id_from("/store.db")
+  end
 end
 
 class CursorIdeAdapterTest < Minitest::Test
@@ -41,6 +185,11 @@ class CursorIdeAdapterTest < Minitest::Test
 
   def override_env = nil
 
+  def expected_session_id = "t1"
+  # The projects/<name> segment is a bare name, not a path, and the design doc
+  # gives no rule to expand it. nil is the honest answer.
+  def expected_project_path = nil
+
   def test_ide_is_a_separate_agent_from_the_cli
     refute_equal AgentSessions.registry[:cursor], AgentSessions.registry[:cursor_ide]
   end
@@ -49,6 +198,25 @@ class CursorIdeAdapterTest < Minitest::Test
     with_home do |_home, env|
       store = AgentSessions.locate(:cursor_ide, env: env)
       assert(store.warnings.any? { |w| w.include?("sync") })
+    end
+  end
+
+  def test_ide_fidelity_defaults_to_unsupported
+    assert_equal :unsupported, AgentSessions::Adapters::CursorIde.fidelity_value
+  end
+
+  # Gated like Amp's multi-root warning (test_multi_root_warning_appears_only_once_the_store_exists):
+  # a "here is what breaks, please act on it" report reaches only someone who
+  # can act on it, so it must stay silent for a user with no ~/.cursor/projects
+  # at all, and appear once one exists — which is also the machine-observed
+  # case design doc 8.3 records: the declared store is a real bug, not an
+  # empty result, and this is where a user actually adopting the gem finds
+  # out about it.
+  def test_warns_about_the_real_ide_session_location_once_the_declared_store_exists
+    with_home do |home, env|
+      refute(AgentSessions.locate(:cursor_ide, env: env).warnings.any? { |w| w.include?("globalStorage") })
+      build_fixture(home)
+      assert(AgentSessions.locate(:cursor_ide, env: env).warnings.any? { |w| w.include?("globalStorage") })
     end
   end
 end

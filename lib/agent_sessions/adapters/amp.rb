@@ -22,10 +22,21 @@ module AgentSessions
       store :secrets, path: "secrets.json", format: :json, optional: true
 
       warning "the server holds the canonical copy; local threads may be a partial mirror"
-      warning "a thread with more than one workspace tree only has its first tree's path " \
-              "recognized as a project; `projects` and `sessions_for_project` will not see any " \
-              "other root — if a project you know has Amp sessions is missing, please open an " \
-              "issue with that thread's env.initial.trees array"
+
+      # Gated, unlike the warning above. That one is a permanent property of the
+      # agent and is worth reading before adopting the gem; this one is a "here is
+      # what breaks, please send this back" report, and the plan's rule for those is
+      # that they reach only people who can act on them. Same gate pi uses.
+      def warnings
+        list = super
+        if primary_layer.exists?
+          list << "a thread with more than one workspace tree only has its first tree's path " \
+                  "recognized as a project; `projects` and `sessions_for_project` will not see " \
+                  "any other root — if a project you know has Amp sessions is missing, please " \
+                  "open an issue with that thread's env.initial.trees array"
+        end
+        list
+      end
 
       # env.initial.trees is the array a workspace's roots live in (plural —
       # the format is shaped for more than one). Verified 2026-08-05: the one
@@ -136,7 +147,11 @@ module AgentSessions
         return nil if raw_path.nil? || raw_path.empty?
 
         decoded = URI.decode_uri_component(raw_path)
-        decoded == "/" ? decoded : decoded.chomp("/")
+        # Strips a run of trailing separators, not just one: "/app//" would
+        # otherwise land in project_paths beside "/app" and be missed by
+        # sessions_for_project — the same false negative one slash further out.
+        # The lookbehind keeps a bare root "/" intact.
+        decoded.sub(%r{(?<=.)/+\z}, "")
       end
     end
   end

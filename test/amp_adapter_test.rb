@@ -198,6 +198,39 @@ class AmpAdapterTest < Minitest::Test
     end
   end
 
+  # A workspace rooted at "/" is the one case where trailing-slash stripping
+  # could regress a real path back into the empty string the test above rejects.
+  # Nothing else pins the root guard in the strip.
+  def test_a_root_workspace_stays_root_rather_than_becoming_empty
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [{ uri: "file:///" }] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-root.json")
+      assert_equal "/", AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+    end
+  end
+
+  # Multiple trailing separators, not just one: "/app//" would otherwise list
+  # beside "/app" and be missed by sessions_for_project.
+  def test_a_run_of_trailing_separators_is_stripped
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [{ uri: "file:///Users/you/app//" }] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-slashes.json")
+      assert_equal "/Users/you/app", AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+    end
+  end
+
+  # The multi-root caveat is a "here is what breaks, please send this back"
+  # report, so it is gated on the store existing — a user with no Amp installed
+  # cannot act on it. Its ungated sibling above is a permanent property of the
+  # agent and is worth reading before adopting the gem.
+  def test_multi_root_warning_appears_only_once_the_store_exists
+    with_home do |home, env|
+      refute(AgentSessions.locate(:amp, env: env).warnings.any? { |w| w.include?("workspace tree") })
+      build_fixture(home)
+      assert(AgentSessions.locate(:amp, env: env).warnings.any? { |w| w.include?("workspace tree") })
+    end
+  end
+
   def test_project_path_strips_a_trailing_slash
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "file:///Users/you/app/" }] } } }

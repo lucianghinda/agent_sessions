@@ -412,7 +412,15 @@ module AgentSessions
           return record
         end
         nil
-      rescue Errno::ENOENT, Errno::EACCES, Errno::EISDIR
+      # SystemCallError, matching read_json and build_session. The enumerated
+      # Errno list this replaced missed EPERM, which is what macOS returns for a
+      # TCC-protected path rather than EACCES, and ELOOP. The exposure here is
+      # narrower than read_json's — build_session stats the session file first and
+      # drops it on any SystemCallError, so a file that fails outright never
+      # reaches this — but a file that stats cleanly and then fails on read does,
+      # and the three rescues disagreeing on which errnos count is the kind of
+      # inconsistency that becomes a bug the moment one of them moves.
+      rescue SystemCallError
         nil
       end
     end

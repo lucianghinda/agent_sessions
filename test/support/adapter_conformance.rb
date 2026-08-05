@@ -122,11 +122,83 @@ module AdapterConformance
     end
   end
 
+  # --- Filename-parsing conformance -------------------------------------------
+  # Opt in by additionally defining:
+  #   malformed_date_filename -> a filename matching the adapter's own
+  #                              timestamp-in-filename shape, but with an
+  #                              out-of-range digit (month 13, minute 60...)
+  #                              that Time.new rejects
+  #   unmatched_filename      -> a filename that does not match that shape at
+  #                              all (a sync tool's "(conflicted copy)" or
+  #                              similar), forcing the basename fallback
+  # Requires build_fixture(home) to return the path of the file it writes
+  # (write already does), so a sibling file can be written into the same
+  # directory without each test class re-deriving its own layout.
+  #
+  # Written for Task 5 (pi) after two mutations — an unrescued ArgumentError
+  # from a bad filename, and session_id_from's fallback missing its `super`
+  # — survived the full suite despite Codex declaring the identical rescue
+  # and fallback pattern first. The rules had transferred as code; the
+  # evidence they mattered had not. Pi opts in below; any future adapter
+  # that parses a timestamp or id out of its filename should too.
+
+  def test_conformance_a_malformed_date_filename_does_not_take_down_the_listing
+    skip_unless_filename_parsed
+    with_home do |home, env|
+      fixture_path = build_fixture(home)
+      write("{}", File.dirname(fixture_path), malformed_date_filename)
+
+      sessions = adapter_class.new(env: env).sessions.force
+      assert_equal 2, sessions.size, "expected the listing to survive #{malformed_date_filename.inspect}"
+
+      bad = sessions.find { |s| File.basename(s.path) == malformed_date_filename }
+      refute_nil bad, "expected a session for #{malformed_date_filename.inspect}"
+      assert_equal base_started_at(bad), bad.started_at,
+                   "expected started_at_for's rescue to fall back to Base's answer"
+    end
+  end
+
+  def test_conformance_unrecognized_filename_falls_back_to_the_basename
+    skip_unless_filename_parsed
+    with_home do |home, env|
+      fixture_path = build_fixture(home)
+      write("{}", File.dirname(fixture_path), unmatched_filename)
+
+      sessions = adapter_class.new(env: env).sessions.force
+      assert_equal 2, sessions.size, "expected the listing to survive #{unmatched_filename.inspect}"
+
+      unmatched = sessions.find { |s| File.basename(s.path) == unmatched_filename }
+      refute_nil unmatched, "expected a session for #{unmatched_filename.inspect}"
+      assert_equal File.basename(unmatched_filename, ".*"), unmatched.id
+      assert_equal base_started_at(unmatched), unmatched.started_at
+    end
+  end
+
   private
 
   def skip_unless_layer2
     return if respond_to?(:expected_session_id, true)
 
     skip "define expected_session_id and expected_project_path for Layer 2 conformance"
+  end
+
+  def skip_unless_filename_parsed
+    return if respond_to?(:malformed_date_filename, true)
+
+    skip "define malformed_date_filename and unmatched_filename for filename-parsing conformance"
+  end
+
+  # What Base's started_at_for would answer for this session's file — a Time
+  # on a filesystem carrying birthtime, nil on one without (every Linux CI
+  # runner). Comparing against it, rather than asserting non-nil, pins "the
+  # adapter's own fallback fired" on both platforms; refute_nil would only
+  # pin "this machine implements birthtime". Mirrors Codex's own
+  # base_started_at helper; an adapter test class may define its own
+  # same-named private method to override this default if it needs to.
+  def base_started_at(session)
+    AgentSessions::Adapters::Base
+      .instance_method(:started_at_for)
+      .bind(adapter_class.new(env: {}))
+      .call(session.path, File.stat(session.path))
   end
 end

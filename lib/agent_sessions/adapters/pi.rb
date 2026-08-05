@@ -15,6 +15,41 @@ module AgentSessions
       store :sessions, dir: "sessions", glob: "--*--/*.jsonl", format: :jsonl,
                        env: "PI_CODING_AGENT_SESSION_DIR"
 
+      # pi is the one adapter with no real sessions on this machine to check
+      # any of this against (2026-08-05): every source comment below marked
+      # UNVERIFIED is inference from design doc sections 7 and 8.6, not
+      # observation. Source comments do not reach a user running the CLI, so
+      # `warnings` below repeats the gist where it will actually be seen —
+      # gated on the store existing, so only an installed pi reports it.
+      #
+      # To check any of this against a real file:
+      #   head -1 ~/.pi/agent/sessions/--*--/*.jsonl
+      # and look for three things: which key actually holds the cwd (assumed
+      # "cwd" — project_path_for below), which line it is on (assumed line 1
+      # — the limit: argument there), and whether the id segment is 8 hex
+      # characters or a full uuid (assumed 8 hex — FILENAME below). A
+      # mismatch means fixing the matching line below and the warning above
+      # it, not just the comment next to it.
+      def warnings
+        list = super
+        if primary_layer.exists?
+          list << "pi's session header shape is unverified — no pi sessions existed on the machine " \
+                  "this adapter was written on. If `projects` or `du --by project` report nothing " \
+                  "while you have sessions, the header key is not \"cwd\"; please open an issue with " \
+                  "the first line of one file."
+        end
+        list
+      end
+
+      # FILENAME's \h{8} id specifically contradicts the one written source
+      # available: design doc section 8.6 says pi's *entries* carry an
+      # 8-character hex id, while the section 8 table gives the filename
+      # itself as <timestamp>_<uuid>. Both cannot be right, and nothing on
+      # this machine can settle which one pi's own encoder does. \h{8} is
+      # what is implemented here; if a real file uses a full uuid instead,
+      # this regex simply never matches it, and session_id_from below falls
+      # back to the basename — a real but visibly non-canonical id, not a
+      # crash.
       FILENAME = /\A(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})_(\h{8})\.jsonl\z/
 
       def session_id_from(path)
@@ -24,12 +59,34 @@ module AgentSessions
       end
 
       # The rescue is not optional. \d{2} accepts 00-99, and Time.new raises
-      # ArgumentError on month 13, minute 60 and friends. build_session scopes its
-      # own rescue to File.stat so that a raising hook surfaces as the adapter bug
-      # it usually is — but this hook raises on FILE DATA, and without the rescue
-      # one malformed filename returns zero sessions from `sessions`,
-      # `project_paths` and `for_project` alike, and exits the CLI with a raw
-      # backtrace that takes every other agent's rows with it. Measured in Task 4.
+      # ArgumentError on month 13, minute 60 and friends. build_session scopes
+      # its own rescue to File.stat so that a raising hook surfaces as the
+      # adapter bug it usually is — but this hook raises on FILE DATA, and
+      # without the rescue one malformed filename returns zero sessions from
+      # `sessions`, `project_paths` and `for_project` alike, and exits the CLI
+      # with a raw backtrace that takes every other agent's rows with it.
+      # That failure mode was measured in Task 4, against Codex — pi has no
+      # real filenames of its own to reproduce it against, but the mechanism
+      # (Time.new rejecting digits \d{2} happily accepted) belongs to Ruby,
+      # not to any one adapter's data, so the same rescue applies here.
+      #
+      # Local, not UTC: copied from Codex's VERIFIED behaviour (its rollout
+      # filenames use the local clock, confirmed against 360 real files).
+      # pi's is UNVERIFIED — no real pi filename exists on this machine to
+      # check it against. If pi instead publishes UTC filenames, every pi
+      # started_at is silently off by the machine's UTC offset, with no
+      # signal that it happened. The test fixture's header timestamp and
+      # filename timestamp deliberately disagree (see build_fixture in
+      # test/pi_adapter_test.rb) so that a started_at_for which quietly fell
+      # back to reading the header would be caught returning the wrong hour,
+      # rather than passing by coincidence on a UTC machine.
+      #
+      # The rescue wraps Time.new alone rather than the whole method. A
+      # method-scoped rescue would also swallow an ArgumentError from a
+      # future signature change — the commonest Ruby programming error — and
+      # silently fall back to stat.birthtime for every pi session: a
+      # plausible-looking wrong started_at with no signal, which is worse
+      # than a crash.
       def started_at_for(path, stat)
         parts = FILENAME.match(File.basename(path))&.captures or return super
 
@@ -40,24 +97,62 @@ module AgentSessions
         end
       end
 
-      # Same lossy dash rule as Claude, wrapped in double dashes:
-      # /Users/you/app -> --Users-you-app-- (design doc section 7).
-      # Expects an absolute, expanded path; sessions_for_project expands first.
+      # Design doc section 7 gives the shape as "wrap the dashed cwd in
+      # double dashes" but is ambiguous about where the two leading dashes
+      # come from. Read literally — dash-encode the WHOLE cwd, including its
+      # leading "/", then wrap that result in "--" — an absolute path gets
+      # THREE leading dashes: "/Users/you/app" -> "---Users-you-app--". This
+      # implementation takes the other reading: strip the leading "/" first,
+      # dash-encode what remains, then wrap, landing on TWO leading dashes:
+      # "/Users/you/app" -> "--Users-you-app--" — the shape the store's own
+      # "--*--/*.jsonl" glob (above) requires to find anything at all. The
+      # tell if this reading is wrong: a real pi store's project directories
+      # have three leading dashes, not two, and every session inside them is
+      # invisible to this adapter's glob today, not just to encode_project.
+      #
+      # This choice is the safety net for project_path_for's OTHER
+      # unverified assumption (the "cwd" key): sessions_for_project falls
+      # back to comparing a session's own directory name against this
+      # encoding only when its header cwd cannot be read (see
+      # Base#encode_project). Get BOTH assumptions wrong at once — a
+      # non-"cwd" header key AND an off-by-one dash count — and
+      # sessions_for_project/project_paths go silently dark instead of
+      # merely degrading to the name fallback.
+      #
+      # Expects an absolute, expanded path; sessions_for_project expands
+      # first. One behavioural note for whoever changes this: a relative
+      # "app" encodes to "--app--" here (matches the store glob) versus
+      # "-app--" under the old single-leading-dash reading (never matches)
+      # — unreachable today since sessions_for_project always expands
+      # before calling this.
       def encode_project(dir)
-        "-#{dir.gsub(/[^a-zA-Z0-9]/, "-")}--"
+        "--#{dir.delete_prefix("/").gsub(/[^a-zA-Z0-9]/, "-")}--"
       end
 
-      # pi publishes its format: one header line, then typed entries (design doc
-      # 8.6). The cwd key in that header is UNVERIFIED on a real session as of
-      # 2026-08-05 — this machine has none. Verify when one exists.
+      # pi publishes its format: one header line, then typed entries (design
+      # doc 8.6) — which argues for staying TIGHTER than Claude's 25, whose
+      # cwd genuinely was not on line 1 and whose format was never
+      # published. But "publishes a spec" is not the same evidence as
+      # "measured against a real file," and this machine has zero pi
+      # sessions to measure against. limit: 25 matches Claude's number not
+      # because pi is assumed to behave like Claude, but because
+      # scan_jsonl_for_key returns as soon as it finds a usable record: the
+      # width costs nothing while the line-1 assumption holds, and is only
+      # ever paid on the one case this file cannot rule out — a preamble pi
+      # does not document, the same way Claude's kebab-case preamble was not
+      # documented either. The one real cost of going wide: the predicate
+      # below is type-checked but not otherwise selective, so a longer
+      # window is more exposure to a later, unrelated record that happens to
+      # carry a String "cwd" of its own — a decoy shadowing pi's real one —
+      # a risk this file cannot bound without a real session to look at.
       #
-      # The predicate is mandatory, not decoration. scan_jsonl_for_key stops at the
-      # first record merely CARRYING the key, so without a value guard a record
-      # holding "cwd": null shadows a later usable one permanently, and a non-String
-      # cwd reaches project_paths' .uniq.sort and raises.
+      # The predicate is mandatory, not decoration. scan_jsonl_for_key stops
+      # at the first record merely CARRYING the key, so without a value
+      # guard a record holding "cwd": null shadows a later usable one
+      # permanently, and a non-String cwd reaches project_paths' .uniq.sort
+      # and raises.
       def project_path_for(path)
-        record = scan_jsonl_for_key(path, "cwd", limit: 3) { |r| r["cwd"].is_a?(String) }
-        record&.[]("cwd")
+        scan_jsonl_for_key(path, "cwd", limit: 25) { |record| record["cwd"].is_a?(String) }&.fetch("cwd")
       end
     end
   end

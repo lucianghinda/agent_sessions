@@ -115,10 +115,16 @@ module AgentSessions
         @layers ||= self.class.store_configs.map { |config| resolve(config) }
       end
 
+      # single_file is a property of the declaration, not of the resolved path: a
+      # store-level env override replaces where the layer lives without changing
+      # whether it is one file or a directory.
       def resolve(config)
         override = presence(config[:env] && @env[config[:env]])
         root = override ? expand(override) : File.join(base_dir, config[:dir] || config[:path])
-        Location.new(kind: config[:kind], path: root, format: config[:format], glob: config[:glob])
+        Location.new(
+          kind: config[:kind], path: root, format: config[:format],
+          glob: config[:glob], single_file: !config[:path].nil?
+        )
       end
 
       def env_overrides
@@ -138,10 +144,11 @@ module AgentSessions
         Check.new(agent: self.class.agent_name, status: status, claim: claim, detail: detail)
       end
 
+      # A single file's own path is the whole detail; counting it "(1 file)" adds noise.
       def detail_for(location)
         return location.path unless location.glob
 
-        count = location.matches.size
+        count = location.files.size
         "#{location.path} (#{count} file#{"s" unless count == 1})"
       end
 

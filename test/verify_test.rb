@@ -46,13 +46,24 @@ class VerifyTest < Minitest::Test
     end
   end
 
-  # Design doc 8.4 names threads/ and secrets.json as Amp's two stable paths, so a
-  # missing secrets.json is a failure rather than the layout drift Amp is prone to.
-  def test_amp_secrets_is_a_failure_not_drift
+  # threads/ is Amp's one stable path, so its absence is a real failure.
+  def test_amp_threads_is_a_failure_when_missing
+    with_home do |home, env|
+      FileUtils.mkdir_p(File.join(home, ".local", "share", "amp"))
+      checks = AgentSessions.verify(:amp, env: env)
+      assert_equal :fail, checks.find { |c| c.claim.include?("threads") }.status
+    end
+  end
+
+  # secrets.json does not exist until `amp login` runs. An earlier version required it
+  # (design doc 8.4 named it alongside threads/), which showed a red failure to anyone
+  # who installed Amp and never authenticated — for a credentials file whose absence
+  # says nothing about whether the session layout claim holds.
+  def test_amp_secrets_is_drift_not_a_failure
     with_home do |home, env|
       touch(home, ".local", "share", "amp", "threads", "T-1.json")
       checks = AgentSessions.verify(:amp, env: env)
-      assert_equal :fail, checks.find { |c| c.claim.include?("secrets") }.status
+      assert_equal :drift, checks.find { |c| c.claim.include?("secrets") }.status
     end
   end
 

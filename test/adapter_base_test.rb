@@ -28,6 +28,31 @@ class AdapterBaseTest < Minitest::Test
     assert_equal "/elsewhere/hist.jsonl", history.path
   end
 
+  # The dir:/path: distinction is the only place the gem knows a layer is one file
+  # rather than a directory. Discarding it at resolution time is what made
+  # layers.flat_map(&:files) silently skip every single-file layer.
+  def test_path_stores_resolve_to_single_file_locations
+    store = FakeAdapter.new(env: { "HOME" => "/h" }).locate
+    by_kind = store.layers.to_h { |l| [l.kind, l] }
+    assert by_kind.fetch(:history).single_file
+    refute by_kind.fetch(:sessions).single_file
+  end
+
+  def test_env_overridden_path_store_is_still_a_single_file
+    store = FakeAdapter.new(env: { "HOME" => "/h", "FAKE_HISTORY_FILE" => "/elsewhere/hist.jsonl" }).locate
+    assert store.layers.find { |l| l.kind == :history }.single_file
+  end
+
+  def test_gathering_every_layer_includes_single_file_layers
+    with_home do |home, env|
+      touch(home, ".fake", "sessions", "a.jsonl")
+      touch(home, ".fake", "history.jsonl")
+      files = FakeAdapter.new(env: env).locate.layers.flat_map(&:files)
+      assert_includes files, File.join(home, ".fake", "sessions", "a.jsonl")
+      assert_includes files, File.join(home, ".fake", "history.jsonl")
+    end
+  end
+
   def test_reports_all_env_overrides_with_state
     store = FakeAdapter.new(env: { "HOME" => "/h", "FAKE_HOME" => "/custom" }).locate
     by_name = store.env_overrides.to_h { |o| [o.name, o] }

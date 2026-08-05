@@ -30,4 +30,13 @@ class AmpAdapterTest < Minitest::Test
       assert(store.warnings.any? { |w| w.include?("canonical") })
     end
   end
+
+  # secrets.json is optional (see verify_test) but must stay declared, so that audit
+  # can still report a plaintext token file sitting inside a sync folder.
+  def test_secrets_stays_a_layer_so_audit_can_see_it
+    with_home do |_home, env|
+      store = AgentSessions.locate(:amp, env: env)
+      assert_includes store.layers.map(&:kind), :secrets
+    end
+  end
 end

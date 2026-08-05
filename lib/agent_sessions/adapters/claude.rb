@@ -7,6 +7,7 @@ module AgentSessions
       label "Claude Code"
       documented true
       verified_on "2026-07-21"
+      fidelity :full
 
       base_dir default: "~/.claude", env: "CLAUDE_CONFIG_DIR"
 
@@ -29,6 +30,20 @@ module AgentSessions
           list << "CLAUDE_CODE_SKIP_PROMPT_HISTORY is set: history.jsonl is not being written"
         end
         list
+      end
+
+      # Every non-alphanumeric character becomes "-" (design doc section 7).
+      # Verified against real project directories on 2026-08-05:
+      # /Users/luciang/.codex -> -Users-luciang--codex
+      def encode_project(dir)
+        dir.gsub(/[^a-zA-Z0-9]/, "-")
+      end
+
+      # cwd is NOT on line 1 — real sessions open with leafUuid/mode/permissionMode
+      # records and the first cwd appeared at line 4 (verified 2026-08-05). The
+      # bounded scan keeps this a few-KB read on multi-GB files.
+      def project_path_for(path)
+        scan_jsonl_for_key(path, "cwd", limit: 25)&.fetch("cwd", nil)
       end
 
       private

@@ -182,6 +182,19 @@ module AdapterConformance
     skip "define expected_session_id and expected_project_path for Layer 2 conformance"
   end
 
+  # A stricter version could `flunk` instead of `skip` when the adapter
+  # overrides session_id_from or started_at_for without defining these
+  # fixtures: instance_method(:session_id_from).owner != Base separates
+  # "parses its own filenames" from "does not" cleanly, today, for every
+  # adapter. Considered 2026-08-05 and deferred rather than declined: Codex
+  # overrides both hooks but keeps its own pre-existing bespoke coverage of
+  # the same guarantees instead of opting into these, so enabling the
+  # stricter check now would fail Codex's suite, not just catch a future
+  # adapter that forgets — and deciding to migrate Codex onto this shared
+  # conformance is a separate call from this one. The next adapter that
+  # parses filenames without opting in (Cursor, Task 7) is exactly the case
+  # this would catch; worth revisiting once Codex's own tests are folded in
+  # or removed.
   def skip_unless_filename_parsed
     return if respond_to?(:malformed_date_filename, true)
 

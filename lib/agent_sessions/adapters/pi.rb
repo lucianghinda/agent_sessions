@@ -15,28 +15,34 @@ module AgentSessions
       store :sessions, dir: "sessions", glob: "--*--/*.jsonl", format: :jsonl,
                        env: "PI_CODING_AGENT_SESSION_DIR"
 
-      # pi is the one adapter with no real sessions on this machine to check
-      # any of this against (2026-08-05): every source comment below marked
-      # UNVERIFIED is inference from design doc sections 7 and 8.6, not
-      # observation. Source comments do not reach a user running the CLI, so
-      # `warnings` below repeats the gist where it will actually be seen —
-      # gated on the store existing, so only an installed pi reports it.
+      # pi's *session files* are still absent from this machine: all nine
+      # directories under ~/.pi/agent/sessions (real pi output — see
+      # encode_project below) are empty of .jsonl (2026-08-05). Everything
+      # about a session's CONTENT is therefore still inference from design
+      # doc 8.6, not observation: the header's "cwd" key (project_path_for
+      # below), which line it is on (the limit: argument there), and
+      # whether a session's id segment is 8 hex characters or a full uuid
+      # (FILENAME below). `warnings` below repeats the gist where a CLI user
+      # will actually see it, gated on the store existing.
       #
-      # To check any of this against a real file:
+      # The directory NAMING scheme is a different story: it is real pi
+      # output, not a guess — see encode_project's comment.
+      #
+      # To check the remaining unverified points against a real session:
       #   head -1 ~/.pi/agent/sessions/--*--/*.jsonl
-      # and look for three things: which key actually holds the cwd (assumed
-      # "cwd" — project_path_for below), which line it is on (assumed line 1
-      # — the limit: argument there), and whether the id segment is 8 hex
-      # characters or a full uuid (assumed 8 hex — FILENAME below). A
-      # mismatch means fixing the matching line below and the warning above
-      # it, not just the comment next to it.
+      # and look for: which key actually holds the cwd (assumed "cwd"),
+      # which line it is on (assumed line 1), and whether the id segment is
+      # 8 hex characters or a full uuid (assumed 8 hex). A mismatch means
+      # fixing the matching line below and the warning above it, not just
+      # the comment next to it.
       def warnings
         list = super
         if primary_layer.exists?
-          list << "pi's session header shape is unverified — no pi sessions existed on the machine " \
-                  "this adapter was written on. If `projects` or `du --by project` report nothing " \
-                  "while you have sessions, the header key is not \"cwd\"; please open an issue with " \
-                  "the first line of one file."
+          list << "pi's session header shape is unverified — every project directory under this " \
+                  "store is empty of .jsonl files on the machine this adapter was written on, so " \
+                  "the header key inside a real session (assumed \"cwd\") has never been read. If " \
+                  "`projects` or `du --by project` report nothing while you have sessions, that key " \
+                  "is not \"cwd\"; please open an issue with the first line of one file."
         end
         list
       end
@@ -97,36 +103,48 @@ module AgentSessions
         end
       end
 
-      # Design doc section 7 gives the shape as "wrap the dashed cwd in
-      # double dashes" but is ambiguous about where the two leading dashes
-      # come from. Read literally — dash-encode the WHOLE cwd, including its
-      # leading "/", then wrap that result in "--" — an absolute path gets
-      # THREE leading dashes: "/Users/you/app" -> "---Users-you-app--". This
-      # implementation takes the other reading: strip the leading "/" first,
-      # dash-encode what remains, then wrap, landing on TWO leading dashes:
-      # "/Users/you/app" -> "--Users-you-app--" — the shape the store's own
-      # "--*--/*.jsonl" glob (above) requires to find anything at all. The
-      # tell if this reading is wrong: a real pi store's project directories
-      # have three leading dashes, not two, and every session inside them is
-      # invisible to this adapter's glob today, not just to encode_project.
+      # Verified against nine real pi project directories found on this
+      # machine on 2026-08-05 (~/.pi/agent/sessions/--*--, empty of .jsonl
+      # but real encoder output regardless — see the class comment above)
+      # — see test_encode_project_round_trips_the_nine_real_pi_directories
+      # in test/pi_adapter_test.rb. Design doc section 7 described this only
+      # as "wrap the dashed cwd in double dashes," ambiguous on two points
+      # neither of us had settled by observation. Both are now settled by
+      # real output rather than by carrying Claude's rule over into pi's:
       #
-      # This choice is the safety net for project_path_for's OTHER
-      # unverified assumption (the "cwd" key): sessions_for_project falls
-      # back to comparing a session's own directory name against this
-      # encoding only when its header cwd cannot be read (see
-      # Base#encode_project). Get BOTH assumptions wrong at once — a
-      # non-"cwd" header key AND an off-by-one dash count — and
-      # sessions_for_project/project_paths go silently dark instead of
-      # merely degrading to the name fallback.
+      #   1. The dash count. Read literally — dash-encode the WHOLE cwd,
+      #      including its leading "/", then wrap that in "--" — an
+      #      absolute path would get THREE leading dashes. Real pi output
+      #      has TWO: the leading "/" is absorbed into the wrap rather than
+      #      separately encoded, matching the store's own "--*--/*.jsonl"
+      #      glob (above).
+      #
+      #   2. The character class. This used to read like Claude's "every
+      #      non-alphanumeric character becomes -" and that was WRONG: pi
+      #      preserves dots. Two of the nine real directories contain a
+      #      literal "." (a domain name in the path) unchanged, while the
+      #      "/" separators around it became "-". Claude has 45 project
+      #      directories on this same machine and not one contains a dot —
+      #      the two adapters' rules genuinely differ; they do not merely
+      #      happen to agree on every example seen before now.
+      #
+      # What remains a guess: "_", spaces, and any other non-"/" separator
+      # never appear in the nine real directories, so nothing here confirms
+      # whether pi encodes them or preserves them too, the way it preserves
+      # ".". Do not widen this gsub back into a character class without new
+      # evidence — that is exactly the mistake being corrected here.
+      #
+      # This directory-name encoding is what sessions_for_project falls back
+      # to when a session's own header cwd cannot be read (see
+      # Base#encode_project) — pi's whole safety net for project_path_for's
+      # still-unverified "cwd" header key assumption. That fallback is now
+      # solid: a wrong "cwd" key degrades to accurate name matching instead
+      # of two guesses compounding into silent failure.
       #
       # Expects an absolute, expanded path; sessions_for_project expands
-      # first. One behavioural note for whoever changes this: a relative
-      # "app" encodes to "--app--" here (matches the store glob) versus
-      # "-app--" under the old single-leading-dash reading (never matches)
-      # — unreachable today since sessions_for_project always expands
-      # before calling this.
+      # first.
       def encode_project(dir)
-        "--#{dir.delete_prefix("/").gsub(/[^a-zA-Z0-9]/, "-")}--"
+        "--#{dir.delete_prefix("/").gsub("/", "-")}--"
       end
 
       # pi publishes its format: one header line, then typed entries (design

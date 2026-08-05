@@ -64,6 +64,45 @@ class PiAdapterTest < Minitest::Test
     assert_equal "--Users-you-app--", adapter.encode_project("/Users/you/app")
   end
 
+  # Ground truth found 2026-08-05: ~/.pi/agent/sessions holds nine real
+  # project directories — pi's own encoder output, from real work, despite
+  # being empty of .jsonl files (why the store glob found nothing and
+  # nobody looked further before now). These pin the encoding against
+  # reality instead of inference. Two entries carry a literal "." (a domain
+  # name in the path) and prove dots survive — Claude's "every
+  # non-alphanumeric character becomes -" rule does NOT apply to pi, which
+  # was the actual defect this fixture exists to catch. One entry
+  # ("good-enough-testing") is heavily hyphenated already, which is why a
+  # hyphen alone in a directory name is not itself evidence either way — it
+  # is indistinguishable from an encoded "/".
+  REAL_PI_DIRECTORY_ENCODINGS = {
+    "/Users/luciang/Dropbox/workprojects/explorations/departmentofai" =>
+      "--Users-luciang-Dropbox-workprojects-explorations-departmentofai--",
+    "/Users/luciang/Dropbox/workprojects/explorations/ghinda.com/allaboutcoding.ghinda.com/apps" =>
+      "--Users-luciang-Dropbox-workprojects-explorations-ghinda.com-allaboutcoding.ghinda.com-apps--",
+    "/Users/luciang/Dropbox/workprojects/explorations/ghinda.com/apps/blog.ghinda.com" =>
+      "--Users-luciang-Dropbox-workprojects-explorations-ghinda.com-apps-blog.ghinda.com--",
+    "/Users/luciang/Dropbox/workprojects/explorations/goodenoughagents" =>
+      "--Users-luciang-Dropbox-workprojects-explorations-goodenoughagents--",
+    "/Users/luciang/Dropbox/workprojects/explorations/postcraftsudio/apps/postcraftstudio" =>
+      "--Users-luciang-Dropbox-workprojects-explorations-postcraftsudio-apps-postcraftstudio--",
+    "/Users/luciang/Dropbox/workprojects/explorations/writing" =>
+      "--Users-luciang-Dropbox-workprojects-explorations-writing--",
+    "/Users/luciang/Dropbox/workprojects/good-enough-testing/apps/good-enough-testing-bot" =>
+      "--Users-luciang-Dropbox-workprojects-good-enough-testing-apps-good-enough-testing-bot--",
+    "/Users/luciang/Dropbox/workprojects/opensource/review-hunk-changes" =>
+      "--Users-luciang-Dropbox-workprojects-opensource-review-hunk-changes--",
+    "/Users/luciang/Dropbox/workprojects/shortruby/apps/short-ruby-bookmarks" =>
+      "--Users-luciang-Dropbox-workprojects-shortruby-apps-short-ruby-bookmarks--"
+  }.freeze
+
+  def test_encode_project_round_trips_the_nine_real_pi_directories
+    adapter = AgentSessions::Adapters::Pi.new(env: { "HOME" => "/h" })
+    REAL_PI_DIRECTORY_ENCODINGS.each do |cwd, expected|
+      assert_equal expected, adapter.encode_project(cwd), "expected #{cwd.inspect} to round-trip"
+    end
+  end
+
   def test_started_at_comes_from_the_filename
     with_home do |home, env|
       build_fixture(home)

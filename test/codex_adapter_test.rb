@@ -76,10 +76,15 @@ class CodexAdapterTest < Minitest::Test
     end
   end
 
-  # month 13 and minute 60 both pass FILENAME's \d{2} groups (00-99) but both
-  # raise ArgumentError from Time.new, through different internal checks
-  # ("mon out of range" vs "min out of range") — proving the rescue in
-  # started_at_for is not tuned to a single failure path.
+  # minute 60 passes FILENAME's \d{2} group (00-99) but raises ArgumentError
+  # from Time.new ("min out of range") — proving the rescue in started_at_for
+  # is not tuned to a single failure path. Month 13 ("mon out of range") is
+  # the other internal check Time.new can raise from; it used to be looped
+  # over here too, but is now covered by the shared conformance's
+  # malformed_date_filename (pi's fixture uses month 13; see
+  # test/support/adapter_conformance.rb) and dropped from this loop rather
+  # than duplicated — the underlying mechanism belongs to Ruby, not to any
+  # one adapter's data, so proving it once is enough.
   #
   # The assertion that matters is that the LISTING SURVIVES: build_session
   # deliberately lets a raising hook propagate and take the whole enumeration
@@ -88,25 +93,21 @@ class CodexAdapterTest < Minitest::Test
   # absorb it locally — one bad name among two good ones must still yield all
   # three sessions, not zero.
   def test_a_filename_with_an_out_of_range_date_does_not_take_down_the_whole_listing
-    [
-      "rollout-2026-13-21T09-12-03-#{FIXTURE_UUID}.jsonl", # month 13
-      "rollout-2026-07-21T09-60-03-#{FIXTURE_UUID}.jsonl" # minute 60
-    ].each do |bad_filename|
-      with_home do |home, env|
-        write("{}", home, ".codex", "sessions", "2026", "07", "21", bad_filename)
-        write("{}", home, ".codex", "sessions", "2026", "07", "22", "rollout-2026-07-22T09-12-03-#{FIXTURE_UUID}.jsonl")
-        write("{}", home, ".codex", "sessions", "2026", "07", "23", "rollout-2026-07-23T09-12-03-#{FIXTURE_UUID}.jsonl")
+    bad_filename = "rollout-2026-07-21T09-60-03-#{FIXTURE_UUID}.jsonl" # minute 60
+    with_home do |home, env|
+      write("{}", home, ".codex", "sessions", "2026", "07", "21", bad_filename)
+      write("{}", home, ".codex", "sessions", "2026", "07", "22", "rollout-2026-07-22T09-12-03-#{FIXTURE_UUID}.jsonl")
+      write("{}", home, ".codex", "sessions", "2026", "07", "23", "rollout-2026-07-23T09-12-03-#{FIXTURE_UUID}.jsonl")
 
-        sessions = AgentSessions::Adapters::Codex.new(env: env).sessions.force
-        assert_equal 3, sessions.size, "expected the listing to survive #{bad_filename.inspect}"
+      sessions = AgentSessions::Adapters::Codex.new(env: env).sessions.force
+      assert_equal 3, sessions.size, "expected the listing to survive #{bad_filename.inspect}"
 
-        # FILENAME still matches (its \d{2} groups accept the digits); only
-        # Time.new rejects them. session_id_from is unaffected — it is
-        # started_at_for specifically that must fall back to stat.birthtime.
-        bad_session = sessions.find { |s| s.path.end_with?(bad_filename) }
-        assert_equal base_started_at(bad_session), bad_session.started_at,
-                     "expected started_at_for's rescue to fall back to Base's answer"
-      end
+      # FILENAME still matches (its \d{2} groups accept the digits); only
+      # Time.new rejects them. session_id_from is unaffected — it is
+      # started_at_for specifically that must fall back to stat.birthtime.
+      bad_session = sessions.find { |s| s.path.end_with?(bad_filename) }
+      assert_equal base_started_at(bad_session), bad_session.started_at,
+                   "expected started_at_for's rescue to fall back to Base's answer"
     end
   end
 

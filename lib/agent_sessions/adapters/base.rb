@@ -282,8 +282,16 @@ module AgentSessions
       # the glob and its stat is one fewer session, not an error: enumeration is
       # lazy, so that window spans the whole listing, and agents rotate and
       # compact these logs while a caller is still reading them.
+      #
+      # The rescue covers the stat and nothing else. Wrapping the hooks too would
+      # mean an adapter whose started_at_for raised EACCES silently returned zero
+      # sessions — a misdeclared adapter erasing a listing rather than failing.
+      # A hook that raises is a programming error and surfaces, matching `all`.
       def build_session(path)
         stat = File.stat(path)
+      rescue Errno::ENOENT, Errno::EACCES
+        nil
+      else
         Session.new(
           agent: self.class.agent_name,
           id: session_id_from(path),
@@ -294,8 +302,6 @@ module AgentSessions
           format: primary_layer.format,
           fidelity: self.class.fidelity_value
         ) { project_path_for(path) }
-      rescue Errno::ENOENT, Errno::EACCES
-        nil
       end
 
       # Streams a JSONL file looking for a record carrying `key`. Bounded twice

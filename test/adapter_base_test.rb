@@ -301,6 +301,28 @@ class AdapterBaseTest < Minitest::Test
     end
   end
 
+  # The vanished-file rescue must not extend to the hooks. If it did, an adapter
+  # whose started_at_for raised EACCES would return an empty listing instead of
+  # failing — a misdeclared adapter erasing sessions, which is exactly the silent
+  # under-reporting this gem treats as its worst outcome.
+  def test_a_raising_hook_surfaces_instead_of_erasing_the_session
+    broken = Class.new(AgentSessions::Adapters::Base) do
+      agent :broken
+      label "Broken"
+      documented true
+      verified_on "2026-07-01"
+      base_dir default: "~/.broken"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def started_at_for(_path, _stat) = raise(Errno::EACCES, "metadata")
+    end
+
+    with_home do |home, env|
+      touch(home, ".broken", "sessions", "a.jsonl")
+      assert_raises(Errno::EACCES) { broken.new(env: env).sessions.force }
+    end
+  end
+
   # Location#enumerable? exists so "no layout to enumerate" and "enumerated, found
   # none" stay apart. Returning [] here would make the first look like the second.
   def test_sessions_refuse_a_primary_store_with_no_known_layout

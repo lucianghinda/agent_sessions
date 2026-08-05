@@ -49,12 +49,19 @@ module AgentSessions
       # this off by the offset delta while Claude's birthtime-based
       # started_at stays an absolute instant. Harmless today because Task 10
       # sorts sessions by updated_at, not started_at.
+      # The rescue wraps Time.new alone rather than the whole method. A
+      # method-scoped rescue would also swallow an ArgumentError from a future
+      # signature change — the commonest Ruby programming error — and silently
+      # return birthtime for every Codex session: a plausible-looking wrong
+      # started_at with no signal, which is worse than a crash.
       def started_at_for(path, stat)
         parts = FILENAME.match(File.basename(path))&.captures or return super
 
-        Time.new(*parts.first(6).map(&:to_i))
-      rescue ArgumentError # the digits matched but do not form a real date
-        super
+        begin
+          Time.new(*parts.first(6).map(&:to_i))
+        rescue ArgumentError # the digits matched but do not form a real date
+          super
+        end
       end
 
       # Line 1 is session_meta; the cwd lives in its payload (design doc

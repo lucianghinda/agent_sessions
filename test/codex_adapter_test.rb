@@ -59,7 +59,11 @@ class CodexAdapterTest < Minitest::Test
       write("{}", home, ".codex", "sessions", "2026", "07", "21", "rollout-weird.jsonl")
       session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal "rollout-weird", session.id
-      refute_nil session.started_at # confirms started_at_for's super fallback fired too, not just session_id_from's
+      # Confirms started_at_for's super fallback fired too, not just session_id_from's.
+      # Compared against Base rather than asserted non-nil: Base returns nil where
+      # birthtime is unimplemented, which is every Linux CI runner, so refute_nil
+      # would test the platform rather than the fallback.
+      assert_equal base_started_at(session), session.started_at
     end
   end
 
@@ -105,7 +109,8 @@ class CodexAdapterTest < Minitest::Test
         # Time.new rejects them. session_id_from is unaffected — it is
         # started_at_for specifically that must fall back to stat.birthtime.
         bad_session = sessions.find { |s| s.path.end_with?(bad_filename) }
-        refute_nil bad_session.started_at, "expected started_at_for's rescue to fall back to stat.birthtime"
+        assert_equal base_started_at(bad_session), bad_session.started_at,
+                     "expected started_at_for's rescue to fall back to Base's answer"
       end
     end
   end
@@ -174,5 +179,18 @@ class CodexAdapterTest < Minitest::Test
       session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
+  end
+
+  private
+
+  # What Base's started_at_for would answer for this session — a Time on a
+  # filesystem carrying birthtime, nil on one without, which is every Linux CI
+  # runner. Asserting equality against it pins "the super fallback fired" on both
+  # platforms, where refute_nil would only pin "this machine implements birthtime".
+  def base_started_at(session)
+    AgentSessions::Adapters::Base
+      .instance_method(:started_at_for)
+      .bind(AgentSessions::Adapters::Codex.new(env: {}))
+      .call(session.path, File.stat(session.path))
   end
 end

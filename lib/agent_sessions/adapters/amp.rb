@@ -51,8 +51,37 @@ module AgentSessions
       # the percent-decode are rescued rather than allowed to propagate — an
       # unrescued raise here would take every agent's listing down with it,
       # the same failure mode rule 2 warns about.
+      #
+      # Every level is unwrapped by hand and type-checked, rather than one
+      # #dig("env", "initial", "trees", 0, "uri") call: #dig raises TypeError
+      # the moment an intermediate value is present but not itself diggable
+      # (a String "env", a top-level Array, "trees" holding a String instead
+      # of an Array...) and JSON from a partial mirror is exactly the kind of
+      # data that can be present-but-wrong at any of those levels, not merely
+      # absent. That is a second instance of "presence is not a usable
+      # value" (rule 1), one level up: the CONTAINER at each step needs
+      # checking, not just the leaf. Each `[]`/`.first` below is only called
+      # once its receiver has already been confirmed the right shape, so
+      # none of them can raise — the rescue clause stays scoped to the
+      # URI-parsing step that follows, not shape errors, so a genuine
+      # adapter bug in that step still surfaces instead of being hidden.
       def project_path_for(path)
-        uri = read_json(path).dig("env", "initial", "trees", 0, "uri")
+        data = read_json(path)
+        return nil unless data.is_a?(Hash)
+
+        env = data["env"]
+        return nil unless env.is_a?(Hash)
+
+        initial = env["initial"]
+        return nil unless initial.is_a?(Hash)
+
+        trees = initial["trees"]
+        return nil unless trees.is_a?(Array)
+
+        tree = trees.first
+        return nil unless tree.is_a?(Hash)
+
+        uri = tree["uri"]
         return nil unless uri.is_a?(String)
 
         parsed = URI.parse(uri)

@@ -25,9 +25,18 @@ module AgentSessions
         @stderr.puts "unknown command: #{command}"
         help(@stderr, 1)
       end
-    # Catches UnknownAgent for a typo'd agent, and the declaration errors an
-    # adapter raises when it is misconfigured. Layer 1 never raises for disk
-    # state, so anything arriving here is worth one clean line, not a backtrace.
+    # Catches UnknownAgent for a typo'd agent, the declaration errors an
+    # adapter raises when it is misconfigured, and — since Task 8 —
+    # MissingDependency (opencode's sqlite3 gem missing) and UnreadableStore
+    # (opencode's database present but unreadable), both AgentSessions::Error
+    # subclasses. "Layer 1 never raises for disk state" was true before
+    # Layer 2 existed; it is not anymore — opencode's Layer 2 raises both
+    # deliberately (design doc section 9). This broad catch already covers
+    # them, so a future command that walks sessions gets the same one-clean-
+    # line-and-exit-1 treatment as everything else here, rather than a raw
+    # backtrace replacing every OTHER agent's output too. None of today's
+    # commands (where, doctor, audit) call into Layer 2, so this path is not
+    # yet reachable from the CLI — noted for whichever command is first.
     rescue AgentSessions::Error, OptionParser::ParseError => e
       @stderr.puts e.message
       1

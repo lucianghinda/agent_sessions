@@ -24,6 +24,14 @@ module AgentSessions
       # exists. The existence check comes FIRST so machines without opencode
       # never need sqlite3 at all (design doc section 9).
       #
+      # Row order is deliberately unspecified: no ORDER BY, so rows arrive in
+      # whatever order SQLite's own scan produces (rowid order, absent an
+      # index that would change it) — unlike the other six adapters, which are
+      # path-sorted for free by Dir.glob. Invisible today because nothing here
+      # sorts before Task 10 does its own sort_by(&:updated_at); stated so a
+      # future caller of THIS method directly does not come to depend on
+      # insertion order looking stable.
+      #
       # The gap between this check and the open below is a real TOCTOU window —
       # opencode could delete or migrate the file in between — but the open
       # that follows a vanished file raises SQLite3::CantOpenException (verified
@@ -77,10 +85,16 @@ module AgentSessions
 
       # ORDER BY matches the sorted order Base guarantees, so `projects` output is
       # stable and diffable whichever adapter answers it. is_a?(String) excludes
-      # a row whose directory could not pass build_db_session's own guard (NULL,
-      # or the BLOB-storage-class edge case documented there) — "excluded, not
-      # nil", matching Base's project_paths docstring, rather than a literal nil
-      # entry sorting in among real paths.
+      # a row whose directory is NULL (build_db_session's guard, same rule 2
+      # container check) rather than letting a literal nil sort in among real
+      # paths — "excluded, not nil", matching Base's project_paths docstring.
+      # .uniq is needed on top of SQL's own DISTINCT: SQLite's DISTINCT treats a
+      # BLOB and a byte-identical TEXT value as different rows (confirmed
+      # directly — typeof reports "text" vs "blob" for the same bytes even
+      # though the sqlite3 gem returns both to Ruby as String, see
+      # build_db_session's comment), so without this a blob/text pair with
+      # identical bytes would surface as two entries where Base's own
+      # `.uniq.sort` would collapse them to one.
       def project_paths
         db_path = primary_layer.path
         return [] unless File.exist?(db_path)
@@ -89,7 +103,7 @@ module AgentSessions
         each_session_row(db_path, "SELECT DISTINCT directory FROM session ORDER BY directory") do |row|
           paths << row.first if row.first.is_a?(String)
         end
-        paths
+        paths.uniq
       end
 
       private
@@ -97,22 +111,29 @@ module AgentSessions
       # `directory` carries TEXT affinity, so any numeric literal written to it
       # is converted to text at INSERT time (SQLite's own rule, the mirror image
       # of the INTEGER-affinity coercion `session_time` guards below) — but a
-      # value inserted as an actual BLOB storage class, or a NULL that reached
-      # this NOT-NULL column the way a NOT-NULL column added via a defaultless
-      # ALTER TABLE can hold NULL for pre-existing rows, both survive affinity
-      # untouched. is_a?(String) is the same rule 2 container check Cursor's
-      # `cwd.is_a?(String)` applies to the equivalent field, and it doubles as
-      # the "excluded, not nil" filter project_paths needs (Base's own
-      # project_paths docstring): a row that fails it is dropped from that
-      # list rather than appearing as a literal nil entry.
+      # NULL that reached this NOT-NULL column the way a NOT-NULL column added
+      # via a defaultless ALTER TABLE can hold NULL for pre-existing rows
+      # survives affinity untouched, and so does an Integer that landed in a
+      # column SQLite gave BLOB (no-conversion) affinity rather than TEXT (the
+      # test fixture for this reproduces it — a bare, undeclared column type).
+      # is_a?(String) catches both. It does NOT, however, catch an actual BLOB
+      # storage class value the way an earlier version of this comment claimed:
+      # confirmed directly that the sqlite3 gem returns a BLOB to Ruby as a
+      # plain String (ASCII-8BIT-encoded, but still is_a?(String)) — the guard
+      # is correct and load-bearing for what it DOES catch (rule 2's container
+      # check, the same one Cursor's `cwd.is_a?(String)` applies to the
+      # equivalent field, and the "excluded, not nil" project_paths needs per
+      # Base's own docstring), just not a universal type filter. project_paths
+      # separately guards the BLOB/TEXT duplicate this leaves open.
       def build_db_session(db_path, row)
         id, directory, created_ms, updated_ms = row
         project_path = directory.is_a?(String) ? directory : nil
         Session.new(
           agent: self.class.agent_name, id: id, path: db_path, project_path: project_path,
-          started_at: session_time(created_ms), updated_at: session_time(updated_ms),
+          started_at: session_time(created_ms),
+          updated_at: session_time(updated_ms) || session_time(created_ms) || db_mtime(db_path),
           bytes: nil, # rows in a shared database; a file size would be a lie
-          format: :sqlite, fidelity: self.class.fidelity_value
+          format: primary_layer.format, fidelity: self.class.fidelity_value
         )
       end
 
@@ -141,6 +162,40 @@ module AgentSessions
 
         seconds = millis / 1000.0
         Time.at(seconds) if seconds.finite?
+      end
+
+      # CRITICAL, caught in review: plan decision 5 makes updated_at a
+      # cross-adapter invariant — "never nil; started_at may be" — because
+      # every file-based adapter gets it for free from Base#updated_at_for =
+      # stat.mtime, which cannot be nil. opencode is the first adapter that
+      # CAN return nil here (session_time can fail on both created_ms and
+      # updated_ms independently), and a nil is not a value this reader gets
+      # to invent locally: Task 9's `since` filter and Task 10's
+      # sort_by(&:updated_at) both assume the invariant holds, and one
+      # malformed row in a 359-row shared database reaching either would take
+      # the WHOLE cross-agent listing down with an ArgumentError or
+      # NoMethodError — rule 3's failure mode, relocated one layer up and past
+      # every rescue, not removed. build_db_session's fallback chain
+      # (updated_ms -> created_ms -> db_mtime) keeps the invariant instead:
+      # time_created is a real per-session timestamp, not a guess, so it is
+      # tried before falling back to the database FILE's own mtime, which is
+      # reached only when a row's own pair of timestamps are BOTH malformed —
+      # it is not this session's timestamp, but it is a true upper bound on
+      # when anything in the store last changed, and unlike stat.birthtime
+      # it is never allowed to be nil either: File.mtime can still raise
+      # SystemCallError in the narrow window between a successful query and
+      # this call (the same class of race Base's own started_at_for guards
+      # its stat against), and letting THAT reach the caller unrescued would
+      # reintroduce the exact bug this method exists to close. Time.now is
+      # the true last resort — an honest "unknown, treat as just now" — so
+      # this method, unlike every other timestamp helper in this file, is
+      # never allowed to return nil.
+      def db_mtime(db_path)
+        @db_mtime ||= begin
+          File.mtime(db_path)
+        rescue SystemCallError
+          Time.now
+        end
       end
 
       # require_sqlite! must stay OUTSIDE the begin/rescue: if it raised inside,
@@ -180,12 +235,16 @@ module AgentSessions
       # explicitly) that this timeout narrows without pretending to close:
       # a writer that is ITSELF stuck for 5+ seconds still surfaces as
       # UnreadableStore, same as before, just no longer on ordinary contention.
+      # NOT covered by a test: reliably reproducing lock contention needs a
+      # second process or thread holding a write transaction for the exact
+      # duration of the read, which nothing here attempts — noted rather than
+      # left looking covered.
       def each_session_row(db_path, sql, params = [], &block)
         require_sqlite!
         db = nil
         begin
           db = SQLite3::Database.new(
-            "file:#{db_path}?mode=ro",
+            "file:#{escape_uri_path(db_path)}?mode=ro",
             flags: SQLite3::Constants::Open::READONLY | SQLite3::Constants::Open::URI
           )
           db.busy_timeout = 5_000
@@ -195,6 +254,26 @@ module AgentSessions
         ensure
           db&.close
         end
+      end
+
+      # IMPORTANT, caught in review: SQLite's URI parser gives `%`, `#` and
+      # `?` syntactic meaning, and db_path was being interpolated raw. `#`
+      # starts a fragment (silently truncating the path there); `?` starts
+      # the query string, colliding with the `?mode=ro` this method appends.
+      # The worst case, confirmed directly: a path segment that merely
+      # CONTAINS a valid-looking percent-escape — a directory literally named
+      # "a%23b" — gets that escape DECODED by the URI parser into a different
+      # path ("a#b"), so a second, unrelated database sitting at THAT path is
+      # read instead, silently, with no exception at all. Escaping all three
+      # in one pass over the ORIGINAL string is what keeps db_path a literal
+      # string rather than partial URI grammar — Location#files draws the
+      # same line for glob metacharacters, on the same reasoning: a resolved
+      # path may legitimately contain them. One pass, not two sequential
+      # gsubs (escape # and ? first, then % after): escaping # to %23 and
+      # THEN escaping the % that produced would double-encode it to %2523,
+      # corrupting the very escape this method exists to produce correctly.
+      def escape_uri_path(path)
+        path.gsub(/[%#?]/) { format("%%%02X", _1.ord) }
       end
 
       def require_sqlite!

@@ -77,6 +77,18 @@ class AmpAdapterTest < Minitest::Test
   # diggable — a real risk against a partial mirror, not a hypothetical one.
   # Each test below is one such intermediate gone wrong; presence alone (rule
   # 1) is not enough at any of these levels, only at the leaf.
+  #
+  # Each fixture below uses an Array or Integer, never a String, as the wrong
+  # value. That distinction matters: hand-rolled `[]` does NOT raise on a
+  # String intermediate the way #dig does — "not-a-hash"["trees"] is just a
+  # substring search returning nil — so a String fixture happens to still
+  # return the right answer even with its matching guard deleted, and a
+  # mutation-testing pass proved exactly that: the original String-based
+  # fixtures here did not discriminate. Array/Integer intermediates raise
+  # TypeError (or NoMethodError, for `.first`) from plain `[]`/`.first` the
+  # same way a String intermediate raises from `#dig`, so removing any one
+  # guard below turns its test from a passing assertion into an uncaught
+  # exception — proof the guard is load-bearing, not merely written.
 
   def test_project_path_returns_nil_when_the_whole_thread_is_not_a_hash
     with_home do |home, env|
@@ -85,44 +97,156 @@ class AmpAdapterTest < Minitest::Test
     end
   end
 
+  def test_project_path_returns_nil_when_env_is_not_a_hash
+    with_home do |home, env|
+      thread = { env: [1, 2] }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-env-array.json")
+      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+    end
+  end
+
   def test_project_path_returns_nil_when_env_initial_is_not_a_hash
     with_home do |home, env|
-      thread = { env: { initial: "not-a-hash" } }
-      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-initial-string.json")
+      thread = { env: { initial: [1, 2] } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-initial-array.json")
       assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
   def test_project_path_returns_nil_when_trees_is_not_an_array
     with_home do |home, env|
-      thread = { env: { initial: { trees: "not-an-array" } } }
-      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-trees-string.json")
+      thread = { env: { initial: { trees: 5 } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-trees-integer.json")
       assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
   def test_project_path_returns_nil_when_the_first_tree_is_not_a_hash
     with_home do |home, env|
-      thread = { env: { initial: { trees: ["not-a-hash"] } } }
-      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-tree-string.json")
+      thread = { env: { initial: { trees: [[1, 2]] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-tree-array.json")
       assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
-  # The blast-radius assertion that actually matters: one malformed thread
-  # alongside a good one costs exactly that one session's project_path, not
-  # the whole store. Before the fix, TypeError propagating out of
+  # Kept for the same defense-in-depth reason the adapter comment gives: every
+  # JSON type this could realistically be (Hash included) makes URI.parse
+  # raise URI::InvalidURIError, which the narrower rescue below already turns
+  # into nil on its own — so, unlike the four guards above, this fixture does
+  # NOT prove uri.is_a?(String) is load-bearing. It is here anyway to pin the
+  # observable behavior (a non-String uri is a nil project, not a raise)
+  # regardless of which layer ends up answering for it.
+  def test_project_path_returns_nil_when_uri_is_not_a_string
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [{ uri: { a: 1 } }] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-uri-hash.json")
+      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+    end
+  end
+
+  # --- file:// URI edge cases --------------------------------------------------
+
+  # Deliberately "https:///Users/you/x" (empty host), not
+  # "https://example.com/x": a non-empty host would already be rejected by
+  # the host check below, which would let this test pass even with the
+  # scheme check deleted — proving nothing about the scheme check itself.
+  # An empty-host, non-file scheme isolates it: without the scheme check,
+  # this would decode to a wrong-but-present "/Users/you/x" instead of nil.
+  def test_project_path_rejects_a_non_file_scheme
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [{ uri: "https:///Users/you/x" }] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-https.json")
+      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+    end
+  end
+
+  def test_project_path_accepts_the_localhost_authority_form
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [{ uri: "file://localhost/Users/you/app" }] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-localhost.json")
+      session = AgentSessions::Adapters::Amp.new(env: env).sessions.first
+      assert_equal "/Users/you/app", session.project_path
+    end
+  end
+
+  def test_project_path_rejects_a_remote_host
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [{ uri: "file://nas/share" }] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-nas.json")
+      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+    end
+  end
+
+  def test_project_path_is_nil_for_an_opaque_relative_uri
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [{ uri: "file:relative/path" }] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-relative.json")
+      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+    end
+  end
+
+  def test_project_path_is_nil_for_an_empty_path
+    with_home do |home, env|
+      ["file:", "file://", "file://localhost"].each_with_index do |uri, i|
+        thread = { env: { initial: { trees: [{ uri: uri }] } } }
+        write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-empty-#{i}.json")
+      end
+
+      sessions = AgentSessions::Adapters::Amp.new(env: env).sessions.force
+      assert_equal 3, sessions.size
+      assert_empty sessions.filter_map(&:project_path)
+    end
+  end
+
+  def test_project_path_strips_a_trailing_slash
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [{ uri: "file:///Users/you/app/" }] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-trailing.json")
+      session = AgentSessions::Adapters::Amp.new(env: env).sessions.first
+      assert_equal "/Users/you/app", session.project_path
+    end
+  end
+
+  def test_project_path_is_nil_for_an_unescaped_character_in_the_uri
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [{ uri: "file:///Users/you/a b" }] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-unescaped.json")
+      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+    end
+  end
+
+  def test_project_path_reports_the_first_of_several_trees
+    with_home do |home, env|
+      thread = { env: { initial: { trees: [
+        { uri: "file:///Users/you/first" },
+        { uri: "file:///Users/you/second" }
+      ] } } }
+      write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-multi.json")
+      session = AgentSessions::Adapters::Amp.new(env: env).sessions.first
+      assert_equal "/Users/you/first", session.project_path
+    end
+  end
+
+  # The blast-radius assertion that actually matters: malformed threads
+  # alongside a good one cost exactly those sessions' project_paths, not the
+  # whole store. Before the shape fix, TypeError propagating out of
   # project_path_for's #dig would abort Enumerator::Lazy#filter_map/#select
-  # entirely, so `sessions` and `project_paths` returned nothing at all —
-  # for every agent, not just this one malformed Amp thread.
+  # entirely, so `sessions` and `project_paths` returned nothing at all — for
+  # every agent, not just this one malformed Amp thread. "file:relative/path"
+  # is included here (not just as its own test above) because it was the
+  # CRITICAL finding: decode_uri_component(nil) raising NoMethodError had the
+  # identical total-store blast radius as the #dig bug this test was
+  # originally written to pin.
   def test_a_malformed_thread_does_not_take_down_the_whole_store
     with_home do |home, env|
       build_fixture(home)
       write(JSON.generate([1, 2, 3]), home, ".local", "share", "amp", "threads", "T-malformed.json")
+      write(JSON.generate({ env: { initial: { trees: [{ uri: "file:relative/path" }] } } }),
+            home, ".local", "share", "amp", "threads", "T-bad-uri.json")
 
       adapter = AgentSessions::Adapters::Amp.new(env: env)
       sessions = adapter.sessions.force
-      assert_equal 2, sessions.size, "expected the listing to survive the malformed thread"
+      assert_equal 3, sessions.size, "expected the listing to survive both malformed threads"
       assert_equal [expected_project_path], adapter.project_paths
     end
   end

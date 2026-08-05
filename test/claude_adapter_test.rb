@@ -192,6 +192,24 @@ class ClaudeAdapterTest < Minitest::Test
     end
   end
 
+  # The name fallback exists for sessions whose cwd cannot be read; it must never
+  # override one that can. Querying the STALE directory's own name is what exposes
+  # that — its two resumed sessions sit in a name-matching directory while
+  # recording a different cwd, so they must be excluded on their own merits.
+  # Without this, `s.project_path == dir || name_matches` passes every other test.
+  def test_name_fallback_never_overrides_a_readable_cwd
+    with_home do |home, env|
+      write_session(home, "-Users-you-review-hunk-changes", "22222222-0000-4000-8000-000000000006",
+                    "/Users/you/hunk-review-changes")
+      write_session(home, "-Users-you-review-hunk-changes", "33333333-0000-4000-8000-000000000007",
+                    "/Users/you/hunk-review-changes")
+      write_session(home, "-Users-you-review-hunk-changes", "66666666-0000-4000-8000-00000000000a",
+                    "/Users/you/review-hunk-changes")
+      found = AgentSessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/review-hunk-changes").force
+      assert_equal %w[66666666-0000-4000-8000-00000000000a], found.map(&:id)
+    end
+  end
+
   private
 
   # Builds a realistically-shaped session file: kebab-case preamble records, a

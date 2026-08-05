@@ -27,6 +27,14 @@ class CodexAdapterTest < Minitest::Test
   def expected_session_id = FIXTURE_UUID
   def expected_project_path = "/Users/you/app"
 
+  # Opts into the shared filename-parsing conformance. Codex had bespoke versions
+  # of both guards; the shared ones assert the same properties and are what every
+  # filename-parsing adapter now inherits, so the local copies were removed rather
+  # than kept in parallel. Month 13 is chosen because Time.new rejects it through a
+  # different internal check than minute 60, which the local test also covered.
+  def malformed_date_filename = "rollout-2026-13-21T09-12-03-#{FIXTURE_UUID}.jsonl"
+  def unmatched_filename = "rollout-weird.jsonl"
+
   def expected_default_path(home) = File.join(home, ".codex", "sessions")
 
   def override_env = { "CODEX_HOME" => "/custom/codex" }
@@ -51,19 +59,6 @@ class CodexAdapterTest < Minitest::Test
       build_fixture(home)
       session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal Time.new(2026, 7, 21, 9, 12, 3), session.started_at
-    end
-  end
-
-  def test_unrecognized_filenames_fall_back_to_the_basename
-    with_home do |home, env|
-      write("{}", home, ".codex", "sessions", "2026", "07", "21", "rollout-weird.jsonl")
-      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
-      assert_equal "rollout-weird", session.id
-      # Confirms started_at_for's super fallback fired too, not just session_id_from's.
-      # Compared against Base rather than asserted non-nil: Base returns nil where
-      # birthtime is unimplemented, which is every Linux CI runner, so refute_nil
-      # would test the platform rather than the fallback.
-      assert_equal base_started_at(session), session.started_at
     end
   end
 
@@ -183,14 +178,4 @@ class CodexAdapterTest < Minitest::Test
 
   private
 
-  # What Base's started_at_for would answer for this session — a Time on a
-  # filesystem carrying birthtime, nil on one without, which is every Linux CI
-  # runner. Asserting equality against it pins "the super fallback fired" on both
-  # platforms, where refute_nil would only pin "this machine implements birthtime".
-  def base_started_at(session)
-    AgentSessions::Adapters::Base
-      .instance_method(:started_at_for)
-      .bind(AgentSessions::Adapters::Codex.new(env: {}))
-      .call(session.path, File.stat(session.path))
-  end
 end

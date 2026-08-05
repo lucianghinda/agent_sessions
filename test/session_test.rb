@@ -56,6 +56,18 @@ class SessionTest < Minitest::Test
     assert_equal 1, calls
   end
 
+  # Pins the promise the class comment makes. Releasing the resolver after a
+  # successful call is what makes this breakable: releasing it before the call,
+  # or in an ensure, would freeze the failure in place and both mutations
+  # otherwise pass green.
+  def test_a_raising_resolver_is_retried_not_memoized
+    calls = 0
+    session = build { calls += 1; raise IOError, "EACCES" if calls == 1; "/late/answer" }
+    assert_raises(IOError) { session.project_path }
+    assert_equal "/late/answer", session.project_path
+    assert_equal 2, calls
+  end
+
   def test_project_path_can_be_pre_resolved
     session = build(project_path: "/Users/you/app")
     assert_equal "/Users/you/app", session.project_path

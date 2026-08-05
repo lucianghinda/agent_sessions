@@ -2,6 +2,7 @@
 
 require "json"
 require "date"
+require "uri"
 
 require_relative "agent_sessions/version"
 require_relative "agent_sessions/errors"

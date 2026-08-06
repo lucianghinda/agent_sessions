@@ -46,10 +46,20 @@ class EnumerationTest < Minitest::Test
     end
   end
 
+  # Plants a session a NON-scoped agent would match, so the assertion can tell
+  # "swept only fake" from "swept everything". Asserting emptiness alone cannot:
+  # under a synthetic HOME every agent returns nothing, so the scoped and
+  # unscoped calls agree for the wrong reason. The unscoped call is the control.
   def test_for_project_agents_scopes_the_sweep
-    with_home do |_home, env|
-      result = AgentSessions.for_project("/Users/you/app", env: env, agents: [:fake]).force
-      assert_empty result
+    with_home do |home, env|
+      write(JSON.generate({ type: "attachment", cwd: "/Users/you/app" }),
+            home, ".claude", "projects", "-Users-you-app", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl")
+
+      scoped = AgentSessions.for_project("/Users/you/app", env: env, agents: [:fake]).force
+      assert_empty scoped, "expected agents: [:fake] to exclude claude's matching session"
+
+      unscoped = AgentSessions.for_project("/Users/you/app", env: env).force
+      assert_equal [:claude], unscoped.map(&:agent), "control: unscoped must find it"
     end
   end
 

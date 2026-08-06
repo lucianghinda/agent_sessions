@@ -61,6 +61,8 @@ module AgentSessions
     # That raise happens on enumeration, not on this call, because the filter
     # itself is lazy — `sessions(:x, since: bad).first(1)` can raise from inside
     # `first`, not from this line.
+    # Raises MissingDependency or UnreadableStore for opencode under the same
+    # conditions described on for_project below.
     def sessions(agent, env: ENV, since: nil)
       list = adapter_for(agent).new(env: env).sessions
       since ? list.select { |session| session.updated_at >= since } : list
@@ -71,7 +73,9 @@ module AgentSessions
     # asked. Within one adapter, though, laziness cannot skip non-matching
     # sessions — sessions_for_project must still stat and check each candidate
     # to know it does not match, so an adapter with zero matches costs a full
-    # scan of its store before the sweep moves on.
+    # scan of its store before the sweep moves on. True of the six Base-driven
+    # adapters; opencode pushes the filter into SQL (WHERE directory = ?) and
+    # stats nothing.
     #
     # Deliberately does NOT rescue MissingDependency or UnreadableStore: opencode
     # without the sqlite3 gem, or with a corrupt/locked database, raises. Since
@@ -86,11 +90,20 @@ module AgentSessions
     # just wants to route around a known-bad agent can pass `agents:` naming
     # every registered agent except it. The CLI (Task 10) does the former,
     # turning the same exceptions into per-agent "skipped" lines instead of one
-    # failed sweep.
+    # failed sweep. Note a rescue cannot resume this enumerator: re-calling each
+    # after a raise re-raises from the same adapter. The only recovery is a
+    # fresh call with a narrower `agents:`.
+    # Adapters are resolved eagerly, so an unknown name in `agents:` raises here
+    # rather than mid-sweep. The deferral above is about DATA conditions, where
+    # the raise carries information about a store; a typo'd agent symbol is a
+    # programmer error knowable before any I/O, and `agents: [:claude, :nope]`
+    # otherwise hands back Claude's sessions and then crashes. Base#initialize
+    # only stores @env, so constructing all seven up front costs nothing, and
+    # the sweep stays lazy — first(n) still stops at the first matching adapter.
     def for_project(dir, env: ENV, agents: nil)
       dir = File.expand_path(dir)
-      names = agents || registry.keys
-      names.lazy.flat_map { |name| adapter_for(name).new(env: env).sessions_for_project(dir) }
+      adapters = (agents || registry.keys).map { |name| adapter_for(name).new(env: env) }
+      adapters.lazy.flat_map { |adapter| adapter.sessions_for_project(dir) }
     end
 
     # Eager, unlike sessions/for_project: project_paths already reads every
@@ -98,6 +111,7 @@ module AgentSessions
     # so the recorded cwd is the only reliable source), sorts, and dedupes, so a
     # lazy return type here would promise a laziness the work underneath cannot
     # honor. Returns a plain, already-sorted Array.
+    # Raises MissingDependency or UnreadableStore for opencode, as sessions does.
     def projects(agent, env: ENV)
       adapter_for(agent).new(env: env).project_paths
     end

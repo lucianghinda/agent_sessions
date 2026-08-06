@@ -30,6 +30,11 @@ class EnumerationTest < Minitest::Test
       FileUtils.touch(fresh, mtime: Time.now)
       ids = AgentSessions.sessions(:fake, env: env, since: Time.now - 60).force.map(&:id)
       assert_equal ["fresh"], ids
+
+      # since is inclusive: a session updated exactly at the boundary is in.
+      # Without this, mutating >= to > survives.
+      assert_equal %w[fresh old],
+                   AgentSessions.sessions(:fake, env: env, since: File.mtime(old)).force.map(&:id).sort
     end
   end
 
@@ -65,13 +70,22 @@ class EnumerationTest < Minitest::Test
 
   def test_for_project_rejects_unknown_agents_in_the_scope
     assert_raises(AgentSessions::UnknownAgent) do
-      AgentSessions.for_project("/x", env: { "HOME" => "/h" }, agents: [:nope]).force
+      AgentSessions.for_project("/x", env: { "HOME" => "/h" }, agents: [:nope])
     end
   end
 
-  def test_projects_delegates_to_the_adapter
-    with_home do |_home, env|
-      assert_empty AgentSessions.projects(:fake, env: env)
+  # Asserting empty against an adapter with no projects passes for any
+  # implementation returning anything empty — gutting the body to `[]`, ignoring
+  # `env:`, or routing to the wrong adapter all survived it. The second
+  # assertion is what pins the agent argument: without it, projects(:codex)
+  # could return Claude's projects and nothing would notice.
+  def test_projects_returns_the_named_agents_recorded_project_paths
+    with_home do |home, env|
+      write(JSON.generate({ type: "attachment", cwd: "/Users/you/app" }),
+            home, ".claude", "projects", "-Users-you-app", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl")
+
+      assert_equal ["/Users/you/app"], AgentSessions.projects(:claude, env: env)
+      assert_empty AgentSessions.projects(:fake, env: env), "the agent argument must pick the adapter"
     end
   end
 end

@@ -130,6 +130,23 @@ class CLITest < Minitest::Test
     path
   end
 
+  # Cursor's ids are two nested uuids joined by "/", so one Cursor row would
+  # otherwise set the shared id_width to 73 where every other agent needs 36 —
+  # padding every other row and pushing lines past 80 columns. No machine in
+  # this suite has Cursor sessions, so nothing exercises the cap incidentally.
+  def test_long_ids_are_elided_so_one_agent_cannot_widen_every_row
+    cli = AgentSessions::CLI.new([])
+    long = "0192aa11-2b3c-4d5e-8f90-a1b2c3d4e5f6/0192bb22-3c4d-5e6f-8091-b2c3d4e5f607"
+    elided = cli.send(:elide, long)
+
+    assert_operator elided.length, :<=, AgentSessions::CLI::ID_COLUMN_MAX
+    assert elided.start_with?("0192aa11"), "kept the head: #{elided}"
+    assert elided.end_with?("b2c3d4e5f607"), "kept the tail: #{elided}"
+
+    short = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    assert_equal short, cli.send(:elide, short), "an id inside the cap is untouched"
+  end
+
   def test_list_shows_sessions_newest_first
     with_home do |home, env|
       claude_fixture(home, id: "older", mtime: Time.now - 7200)

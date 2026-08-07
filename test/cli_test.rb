@@ -479,4 +479,435 @@ class CLITest < Minitest::Test
       assert_equal "", out
     end
   end
+
+  def test_du_groups_by_agent_with_totals
+    with_home do |home, env|
+      path_a = claude_fixture(home, id: "a1")
+      path_b = claude_fixture(home, id: "a2")
+      status, out, = run_cli("du", env: env)
+      assert_equal 0, status
+
+      expected = AgentSessions::CLI.new([]).send(:human_bytes, File.size(path_a) + File.size(path_b))
+      assert_match(/\Aclaude\s+2\s+#{Regexp.escape(expected)}\z/, out.lines.first.chomp)
+
+      total_line = out.lines.find { |line| line.start_with?("TOTAL") }
+      refute_nil total_line, "expected a TOTAL row:\n#{out}"
+      assert_match(/\ATOTAL\s+2\s+#{Regexp.escape(expected)}\z/, total_line.chomp)
+    end
+  end
+
+  def test_du_by_project_pays_the_read_and_groups_by_recorded_cwd
+    with_home do |home, env|
+      claude_fixture(home, project: "/Users/you/app", id: "p1")
+      claude_fixture(home, project: "/Users/you/other", id: "p2")
+      _, out, = run_cli("du", "--by", "project", env: env)
+      assert_includes out, "/Users/you/app"
+      assert_includes out, "/Users/you/other"
+    end
+  end
+
+  # Three of seven adapters can legitimately fail to resolve a project (Amp
+  # with no workspace tree, cursor_ide by design, pi if its unverified header
+  # key is wrong). Grouping those sessions under "(unknown)" rather than
+  # dropping them is what decision 3 in the task asks for; without this
+  # branch a session with no recorded cwd would simply vanish from the table.
+  def test_du_by_project_groups_unresolvable_sessions_under_unknown
+    with_home do |home, env|
+      write(JSON.generate({ type: "attachment" }), home, ".claude", "projects", "-nowhere", "u1.jsonl")
+      _, out, = run_cli("du", "--by", "project", env: env)
+      assert_includes out, "(unknown)"
+    end
+  end
+
+  def test_du_shows_question_mark_when_sizes_are_unknown
+    sizeless = Class.new(AgentSessions::Adapters::Base) do
+      agent :sizeless
+      label "Sizeless"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.sizeless"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions
+        [AgentSessions::Session.new(agent: :sizeless, id: "s1", path: "/db", project_path: nil,
+                                    started_at: nil, updated_at: Time.now, bytes: nil,
+                                    format: :sqlite, fidelity: :full)].lazy
+      end
+    end
+    AgentSessions.register(sizeless)
+
+    with_home do |_home, env|
+      _, out, = run_cli("du", env: env)
+      assert_match(/sizeless\s+1\s+\?/, out)
+
+      _, json_out, = run_cli("du", "--json", env: env)
+      row = JSON.parse(json_out).find { |r| r["group"] == "sizeless" }
+      assert_nil row.fetch("bytes")
+      assert_equal 1, row.fetch("unknown_sessions")
+    end
+  ensure
+    AgentSessions.registry.delete(:sizeless)
+  end
+
+  # A group with SOME known and SOME unknown sizes must say so with a "+",
+  # not report a plain (silently short) total and not fall back to "?" as if
+  # nothing in the group were known. This is the one case a fixture built
+  # from all-known or all-unknown sessions alone cannot exercise.
+  def test_du_shows_a_plus_suffix_when_only_some_sizes_in_a_group_are_known
+    mixed = Class.new(AgentSessions::Adapters::Base) do
+      agent :mixed
+      label "Mixed"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.mixed"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions
+        [
+          AgentSessions::Session.new(agent: :mixed, id: "known", path: "/a", project_path: nil,
+                                      started_at: nil, updated_at: Time.now, bytes: 1024,
+                                      format: :sqlite, fidelity: :full),
+          AgentSessions::Session.new(agent: :mixed, id: "unknown", path: "/b", project_path: nil,
+                                      started_at: nil, updated_at: Time.now, bytes: nil,
+                                      format: :sqlite, fidelity: :full)
+        ].lazy
+      end
+    end
+    AgentSessions.register(mixed)
+
+    with_home do |_home, env|
+      _, out, = run_cli("du", env: env)
+      assert_match(/mixed\s+2\s+1\.0 KB\+/, out)
+
+      _, json_out, = run_cli("du", "--json", env: env)
+      row = JSON.parse(json_out).find { |r| r["group"] == "mixed" }
+      assert_equal 1024, row.fetch("bytes"), "the known portion must still be reported, not nulled out"
+      assert_equal 1, row.fetch("unknown_sessions")
+    end
+  ensure
+    AgentSessions.registry.delete(:mixed)
+  end
+
+  def test_du_rejects_unknown_by
+    with_home do |_home, env|
+      status, _, err = run_cli("du", "--by", "vibes", env: env)
+      assert_equal 1, status
+      assert_includes err, "vibes"
+    end
+  end
+
+  def test_du_rejects_a_stray_positional_argument
+    with_home do |home, env|
+      claude_fixture(home)
+      status, out, err = run_cli("du", "agent", env: env)
+      assert_equal 1, status
+      assert_includes err, "agent"
+      assert_equal "", out
+    end
+  end
+
+  def test_du_json
+    with_home do |home, env|
+      claude_fixture(home)
+      _, out, = run_cli("du", "--json", env: env)
+      rows = JSON.parse(out)
+      row = rows.find { |r| r["group"] == "claude" }
+      assert_equal 1, row.fetch("sessions")
+      assert_kind_of Integer, row.fetch("bytes")
+      assert_equal 0, row.fetch("unknown_sessions")
+    end
+  end
+
+  # Dropping any one of group/sessions/bytes/unknown_sessions leaves the
+  # suite green otherwise, since no other test asserts against the full
+  # field set — the same reasoning as list's pinned-field-set test.
+  def test_du_json_row_field_set_is_pinned
+    with_home do |home, env|
+      claude_fixture(home)
+      _, out, = run_cli("du", "--json", env: env)
+      row = JSON.parse(out).first
+      assert_equal %w[group sessions bytes unknown_sessions].sort, row.keys.sort
+    end
+  end
+
+  def test_du_of_nothing_is_quietly_empty
+    with_home do |_home, env|
+      status, out, = run_cli("du", env: env)
+      assert_equal 0, status
+      assert_equal "", out
+    end
+  end
+
+  def test_du_json_of_nothing_is_an_empty_array
+    with_home do |_home, env|
+      _, out, = run_cli("du", "--json", env: env)
+      assert_equal [], JSON.parse(out)
+    end
+  end
+
+  # Exit code is 1 even though the rest of the table printed successfully —
+  # the same reasoning list's equivalent test documents: a skip notice lives
+  # only on stderr, and a green exit code next to a table that quietly
+  # dropped an agent's bytes is the silent-under-reporting failure mode
+  # wearing a disguise (decision 11, widened to du by decision 11a).
+  def test_du_exits_nonzero_when_an_agent_is_skipped
+    broken = Class.new(AgentSessions::Adapters::Base) do
+      agent :broken
+      label "Broken"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.broken"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions = raise AgentSessions::UnreadableStore, "database is locked"
+    end
+    AgentSessions.register(broken)
+
+    with_home do |home, env|
+      claude_fixture(home)
+      status, out, err = run_cli("du", env: env)
+      assert_equal 1, status
+      assert_includes out, "claude"
+      assert_includes err, "broken: skipped (database is locked)"
+    end
+  ensure
+    AgentSessions.registry.delete(:broken)
+  end
+
+  # Groups are sorted by known bytes descending, but every all-unknown group
+  # (opencode's real shape: 359 sessions, every one nil bytes) ties at zero
+  # known bytes. Without a tiebreaker, that tie resolves to group_by's
+  # insertion order — which is registration order, an accident of how
+  # AgentSessions.agents happens to be built, not a fact about the data. The
+  # session-count tiebreaker at least ranks the biggest all-unknown group
+  # above a smaller one, rather than leaving it to that accident.
+  def test_du_sorts_known_bytes_first_then_larger_unknown_groups_before_smaller_ones
+    big_unknown = Class.new(AgentSessions::Adapters::Base) do
+      agent :big_unknown
+      label "Big unknown"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.big_unknown"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions
+        Array.new(10) do |i|
+          AgentSessions::Session.new(agent: :big_unknown, id: "s#{i}", path: "/x#{i}", project_path: nil,
+                                      started_at: nil, updated_at: Time.now, bytes: nil,
+                                      format: :sqlite, fidelity: :full)
+        end.lazy
+      end
+    end
+    small_unknown = Class.new(AgentSessions::Adapters::Base) do
+      agent :small_unknown
+      label "Small unknown"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.small_unknown"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions
+        [AgentSessions::Session.new(agent: :small_unknown, id: "s0", path: "/y", project_path: nil,
+                                    started_at: nil, updated_at: Time.now, bytes: nil,
+                                    format: :sqlite, fidelity: :full)].lazy
+      end
+    end
+    AgentSessions.register(big_unknown)
+    AgentSessions.register(small_unknown)
+
+    with_home do |home, env|
+      claude_fixture(home)
+      _, out, = run_cli("du", env: env)
+      lines = out.lines.map(&:chomp)
+      claude_index = lines.index { |line| line.start_with?("claude") }
+      big_index = lines.index { |line| line.start_with?("big_unknown") }
+      small_index = lines.index { |line| line.start_with?("small_unknown") }
+
+      assert claude_index < big_index, "a group with known bytes must rank above an all-unknown group:\n#{out}"
+      assert big_index < small_index, "among equally-unknown groups, more sessions must rank first:\n#{out}"
+    end
+  ensure
+    AgentSessions.registry.delete(:big_unknown)
+    AgentSessions.registry.delete(:small_unknown)
+  end
+
+  # print_du_table right-aligns its size column the same way audit and list
+  # already do (shared convention) — proven end to end, the same way list's
+  # equivalent test is: two rows whose byte-cell text differs in length,
+  # checking both that the column is padded to one width and that the
+  # shorter cell's padding is on the LEFT (right-justified), not the right.
+  def test_du_right_aligns_the_bytes_column
+    small = Class.new(AgentSessions::Adapters::Base) do
+      agent :small
+      label "Small"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.small"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions
+        [AgentSessions::Session.new(agent: :small, id: "s", path: "/s", project_path: nil,
+                                    started_at: nil, updated_at: Time.now, bytes: 5,
+                                    format: :sqlite, fidelity: :full)].lazy
+      end
+    end
+    AgentSessions.register(small)
+
+    with_home do |home, env|
+      write("x" * 500_000, home, ".claude", "projects", "-p", "big.jsonl")
+      _, out, = run_cli("du", env: env)
+      lines = out.lines.map(&:chomp)
+      assert_equal 1, lines.map(&:length).uniq.size, "the bytes column must be padded to a fixed width:\n#{out}"
+
+      small_line = lines.find { |line| line.start_with?("small") }
+      refute_match(/\s\z/, small_line,
+                   "the bytes column must be right-justified (leading spaces), not left " \
+                   "(trailing spaces): #{small_line.inspect}")
+    end
+  ensure
+    AgentSessions.registry.delete(:small)
+  end
+
+  # Decision from the four questions this task must answer: every gated
+  # warning across pi/amp/cursor/cursor_ide names its own symptom as
+  # "projects or du --by project report nothing" — but the only place that
+  # warning text lives is `where`, a command the affected user has no reason
+  # to run. du is where the symptom shows up, so du is where the pointer to
+  # `where` belongs.
+  def test_du_points_to_where_when_an_installed_gated_warning_agent_has_zero_rows
+    flagged = Class.new(AgentSessions::Adapters::Base) do
+      agent :flagged
+      label "Flagged"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.flagged"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def warnings
+        list = super
+        list << "if `projects` or `du --by project` report nothing, open an issue" if primary_layer.exists?
+        list
+      end
+    end
+    AgentSessions.register(flagged)
+
+    with_home do |home, env|
+      # The store directory exists (Store#installed? true, so the gated
+      # warning fires) but holds no *.jsonl — exactly the shape pi's real
+      # gated warning describes: nine real project directories on disk, zero
+      # session files inside any of them.
+      touch(home, ".flagged", "sessions", ".keep")
+      claude_fixture(home)
+      status, _, err = run_cli("du", env: env)
+      assert_equal 0, status, "an installed-but-warned agent is not the same failure as a skip"
+      assert_includes err, "flagged"
+      assert_includes err, "where flagged"
+    end
+  ensure
+    AgentSessions.registry.delete(:flagged)
+  end
+
+  # The other half of the same decision: an agent nobody has ever installed
+  # (no store on disk at all) must stay silent. Real pi/cursor/cursor_ide on
+  # a machine that has never used them are exactly this case, and the task's
+  # own reasoning says zero rows from an agent nobody has used is not a
+  # symptom worth a line.
+  def test_du_does_not_point_at_an_agent_that_was_never_installed
+    uninstalled = Class.new(AgentSessions::Adapters::Base) do
+      agent :uninstalled
+      label "Uninstalled"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.never-installed-anywhere"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def warnings
+        list = super
+        list << "gated warning that must not fire" if primary_layer.exists?
+        list
+      end
+    end
+    AgentSessions.register(uninstalled)
+
+    with_home do |home, env|
+      claude_fixture(home)
+      _, _, err = run_cli("du", env: env)
+      refute_includes err, "uninstalled"
+    end
+  ensure
+    AgentSessions.registry.delete(:uninstalled)
+  end
+
+  # Isolates the OTHER half of the `installed? && !warnings.empty?` guard:
+  # an agent can be genuinely installed (its store directory is really there)
+  # and still contribute zero rows for a completely ordinary reason — an
+  # empty store — with no warning at all. Without the warnings check, this
+  # would fire on every empty-but-real store on a user's machine, which is
+  # noise, not signal.
+  def test_du_does_not_point_at_an_installed_agent_with_no_warnings_and_zero_rows
+    quiet = Class.new(AgentSessions::Adapters::Base) do
+      agent :quiet
+      label "Quiet"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.quiet"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+      # No warnings declared at all -- Base#warnings returns [].
+    end
+    AgentSessions.register(quiet)
+
+    with_home do |home, env|
+      touch(home, ".quiet", "sessions", ".keep") # installed, but zero .jsonl and zero warnings
+      claude_fixture(home)
+      _, _, err = run_cli("du", env: env)
+      refute_includes err, "quiet"
+    end
+  ensure
+    AgentSessions.registry.delete(:quiet)
+  end
+
+  # Isolates the @skipped_agents exclusion: an agent whose store IS installed
+  # AND carries a gated warning AND raises inside `sessions` must get only
+  # its "skipped (reason)" line, not a second, confusing "contributed 0
+  # sessions" line for the same underlying failure.
+  def test_du_does_not_double_report_a_skipped_agent_as_a_gated_warning_agent
+    broken = Class.new(AgentSessions::Adapters::Base) do
+      agent :broken_and_warned
+      label "Broken and warned"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.broken_and_warned"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def warnings
+        list = super
+        list << "gated warning" if primary_layer.exists?
+        list
+      end
+
+      def sessions = raise AgentSessions::UnreadableStore, "database is locked"
+    end
+    AgentSessions.register(broken)
+
+    with_home do |home, env|
+      touch(home, ".broken_and_warned", "sessions", ".keep") # installed AND warned
+      claude_fixture(home)
+      status, _, err = run_cli("du", env: env)
+      assert_equal 1, status
+      assert_includes err, "broken_and_warned: skipped (database is locked)"
+      refute_includes err, "contributed 0 sessions"
+    end
+  ensure
+    AgentSessions.registry.delete(:broken_and_warned)
+  end
 end

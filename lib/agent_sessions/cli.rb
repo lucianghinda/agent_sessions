@@ -14,6 +14,7 @@ module AgentSessions
       @stderr = stderr
       @now = now
       @agents_skipped = false
+      @skipped_agents = []
     end
 
     def run
@@ -21,6 +22,7 @@ module AgentSessions
       case command
       when "where" then where
       when "list" then list
+      when "du" then du
       when "doctor" then doctor
       when "audit" then audit
       when "version", "--version", "-v" then version
@@ -100,6 +102,59 @@ module AgentSessions
         @stdout.puts JSON.pretty_generate(rows.map { |session| jsonable(session_row(session)) })
       else
         print_session_table(rows)
+      end
+      exit_code_honoring_skips
+    end
+
+    def du
+      options = { json: false, by: "agent" }
+      OptionParser.new do |opts|
+        opts.banner = "Usage: agent-sessions du [--by agent|project] [--json]"
+        opts.on("--by KIND", "Group by agent (default) or project") do |value|
+          raise Error, "invalid --by #{value.inspect} (use agent or project)" unless %w[agent project].include?(value)
+
+          options[:by] = value
+        end
+        opts.on("--json", "Output JSON") { options[:json] = true }
+      end.permute!(@argv)
+      reject_positional_args!("du")
+
+      sessions = collect_sessions({})
+      warn_zero_row_gated_agents(sessions)
+
+      groups = if options[:by] == "project"
+                 # The opt-in that pays for project reads: one bounded read per
+                 # file-based session (decision 12 — plain `list` never pays
+                 # this cost). opencode alone pays nothing extra here, since
+                 # its project_path answers from a column its query already
+                 # selected. A session whose project cannot be resolved groups
+                 # under "(unknown)" rather than being dropped — three of
+                 # seven adapters can legitimately return nil (Amp with no
+                 # workspace tree, cursor_ide by design, pi if its unverified
+                 # header assumption is wrong).
+                 sessions.group_by { |session| session.project_path || "(unknown)" }
+               else
+                 sessions.group_by { |session| session.agent.to_s }
+               end
+
+      # known_bytes descending, count descending as the tiebreaker. Without
+      # the second key, every all-unknown group (known_bytes 0 — opencode's
+      # 359 real sessions on this machine, entirely nil bytes) ties with any
+      # other all-unknown group and falls back to group_by's insertion order,
+      # which is registration order, not anything about the data. The
+      # tiebreaker at least puts the biggest all-unknown group first among
+      # its unknown peers, rather than leaving it to accident.
+      rows = groups.map { |name, group| du_row(name, group) }
+                   .sort_by { |row| [-row.fetch(:known_bytes), -row.fetch(:count)] }
+      if options[:json]
+        payload = rows.map do |row|
+          { group: row[:group], sessions: row[:count],
+            bytes: row[:unknown] == row[:count] ? nil : row[:known_bytes],
+            unknown_sessions: row[:unknown] }
+        end
+        @stdout.puts JSON.pretty_generate(payload)
+      else
+        print_du_table(rows, sessions)
       end
       exit_code_honoring_skips
     end
@@ -253,6 +308,7 @@ module AgentSessions
         scoped.force
       rescue MissingDependency, UnreadableStore => e
         @agents_skipped = true
+        @skipped_agents << agent
         @stderr.puts "#{agent}: skipped (#{e.message})"
         []
       end
@@ -330,6 +386,67 @@ module AgentSessions
     # their size is not a file size and nil means unknown, not zero.
     def bytes_cell(bytes)
       bytes.nil? ? "?" : human_bytes(bytes)
+    end
+
+    def du_row(name, group)
+      { group: name, count: group.size,
+        known_bytes: group.sum { |session| session.bytes || 0 },
+        unknown: group.count { |session| session.bytes.nil? } }
+    end
+
+    def print_du_table(rows, sessions)
+      return if rows.empty?
+
+      all_rows = rows + [du_row("TOTAL", sessions)]
+      name_width = all_rows.map { |row| row[:group].length }.max
+      count_width = all_rows.map { |row| row[:count].to_s.length }.max
+      size_cells = all_rows.map { |row| du_bytes_cell(row) }
+      size_width = size_cells.map(&:length).max
+      all_rows.each_with_index do |row, index|
+        @stdout.puts [
+          row[:group].ljust(name_width),
+          row[:count].to_s.rjust(count_width),
+          size_cells[index].rjust(size_width)
+        ].join("  ")
+      end
+    end
+
+    # All sizes in the group unknown -> "?" (never a silently-short zero, per
+    # decision 7 — opencode's bytes are nil for all 359 real sessions on this
+    # machine, and a bare "0 B" would look like a real, tiny answer instead of
+    # "cannot know"). Some unknown -> a trailing "+" on the known total, since
+    # it is real but incomplete. All known -> the plain number.
+    #
+    # The "+" says "incomplete" but not "by how much" — deliberate. The text
+    # table stays a one-glance summary; a consumer that needs the exact gap
+    # already has --json, whose payload carries unknown_sessions per row.
+    def du_bytes_cell(row)
+      return "?" if row[:unknown] == row[:count]
+
+      cell = human_bytes(row[:known_bytes])
+      row[:unknown].positive? ? "#{cell}+" : cell
+    end
+
+    # Plan follow-up 9, decided here rather than left open a second time (the
+    # Task 10 review deferred it to du's territory: every gated warning across
+    # pi/amp/cursor/cursor_ide names its own symptom as "projects or
+    # du --by project report nothing", which is this command, not list's).
+    # Fires only for an agent whose store is actually installed
+    # (Store#installed?) and carries at least one warning — a never-used
+    # agent (the common case for pi/cursor/cursor_ide on most machines) stays
+    # silent, since zero rows from an agent nobody has ever used is not a
+    # symptom worth a line. Also skips any agent collect_sessions already
+    # reported skipped above, whose stderr line already explains the zero
+    # rows for a different, already-visible reason.
+    def warn_zero_row_gated_agents(sessions)
+      reporting = sessions.map(&:agent).uniq
+      (AgentSessions.agents - @skipped_agents - reporting).each do |agent|
+        store = AgentSessions.locate(agent, env: @env)
+        next unless store.installed? && !store.warnings.empty?
+
+        @stderr.puts "#{agent}: installed but contributed 0 sessions here — " \
+                     "run `agent-sessions where #{agent}` to see why (#{store.warnings.size} warning(s))"
+      end
     end
 
     def human_bytes(bytes)

@@ -102,6 +102,7 @@ module AgentSessions
       else
         print_session_table(rows)
       end
+      warn_unresolved_projects(options[:agent]) if options[:project]
       exit_code_honoring_skips
     end
 
@@ -493,6 +494,28 @@ module AgentSessions
         @stderr.puts "#{agent}: installed but contributed 0 sessions here — " \
                      "run `agent-sessions where #{agent}` to see why (#{store.warnings.size} warning(s))"
       end
+    end
+
+    # Plan §Step 3a: `project_paths`/`sessions_for_project` both exclude a
+    # session whose project could not be resolved rather than counting it,
+    # so an agent that genuinely records no projects here and one whose
+    # resolution is silently broken look identical. Gated on --project, the
+    # one `list` mode that already pays a per-session content read
+    # (decision 12) — a bare `list` never touches project_path and must not
+    # start paying for it just to print this note. Skips any agent already
+    # reported skipped above (its stderr line already explains itself) and
+    # tolerates a fresh MissingDependency/UnreadableStore the same way
+    # (state can change between the two reads in principle, however
+    # unlikely in practice) rather than letting this diagnostic take the
+    # command down.
+    def warn_unresolved_projects(agent)
+      agents = (agent ? [agent] : AgentSessions.agents) - @skipped_agents
+      count = agents.sum do |a|
+        AgentSessions.unresolved_project_count(a, env: @env)
+      rescue MissingDependency, UnreadableStore
+        0
+      end
+      @stderr.puts "#{count} sessions with unresolved project" if count.positive?
     end
 
     def human_bytes(bytes)

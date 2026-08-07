@@ -88,4 +88,52 @@ class EnumerationTest < Minitest::Test
       assert_empty AgentSessions.projects(:fake, env: env), "the agent argument must pick the adapter"
     end
   end
+
+  # FakeAdapter declares no project_path_for override, so every session it
+  # yields carries a nil project_path from Base's default hook — exactly the
+  # "resolution never even ran" case unresolved_project_count exists to
+  # count. The claude fixture pins the other side: a resolvable session must
+  # NOT be counted, so a survivor that counts total sessions instead of nil
+  # ones fails here.
+  def test_unresolved_project_count_counts_sessions_with_no_recorded_project
+    with_home do |home, env|
+      touch(home, ".fake", "sessions", "a.jsonl")
+      touch(home, ".fake", "sessions", "b.jsonl")
+      write(JSON.generate({ type: "attachment", cwd: "/Users/you/app" }),
+            home, ".claude", "projects", "-Users-you-app", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl")
+
+      assert_equal 2, AgentSessions.unresolved_project_count(:fake, env: env)
+      assert_equal 0, AgentSessions.unresolved_project_count(:claude, env: env)
+    end
+  end
+
+  # The Layer 2 conformance gate skips when a test class does not define
+  # expected_session_id. That was right while adapters adopted one at a time;
+  # from 0.2 on, a skip means a test class lost its opt-in, which would hide
+  # three real tests per adapter behind an expected-looking skip count.
+  #
+  # FakeAdapter is deleted first: this class's own setup registers it as a
+  # test double for Layer 1 fixtures, it is never shipped, and no test class
+  # opts it into Layer 2 conformance (nor should one — it has no on-disk
+  # format to enumerate), so leaving it registered would make this assertion
+  # fail for a reason that has nothing to do with the seven real adapters it
+  # exists to police. teardown's own `registry.delete(:fake)` still runs
+  # after this test and is a harmless no-op against an already-missing key.
+  def test_every_registered_adapter_opts_into_layer_2_conformance
+    AgentSessions.registry.delete(:fake)
+
+    missing = AgentSessions.agents.reject do |agent|
+      klass = AgentSessions.registry.fetch(agent)
+      test_class = ObjectSpace.each_object(Class).find do |candidate|
+        candidate < Minitest::Test &&
+          candidate.method_defined?(:adapter_class) &&
+          candidate.instance_method(:adapter_class).bind_call(candidate.allocate) == klass
+      rescue StandardError
+        false
+      end
+      test_class&.private_method_defined?(:expected_session_id) ||
+        test_class&.method_defined?(:expected_session_id)
+    end
+    assert_empty missing, "adapters with no Layer 2 conformance opt-in: #{missing.inspect}"
+  end
 end

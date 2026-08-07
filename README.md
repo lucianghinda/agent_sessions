@@ -22,9 +22,11 @@ gem "agent_sessions"
 agent-sessions where
 agent-sessions doctor
 agent-sessions audit
+agent-sessions list --since 30d
+agent-sessions du --by project
 ```
 
-Add `--json` to `where`, `doctor`, or `audit` for machine-readable output.
+Add `--json` to `where`, `doctor`, `audit`, `list`, or `du` for machine-readable output. `du --by project` is the one command in the gem that is not stat-only: resolving a project name pays one bounded read per session for the file-based agents (opencode answers from its own SQL query instead, so it pays nothing extra).
 
 ## Ruby API
 
@@ -56,10 +58,20 @@ Resolve for an environment that is not your own:
 AgentSessions.locate(:codex, env: { "CODEX_HOME" => "/tmp/x" })
 ```
 
+Enumerate sessions and map them to projects:
+
+```ruby
+AgentSessions.sessions(:claude).first(5)      # lazy; stats files, never parses them
+AgentSessions.for_project(Dir.pwd)            # every agent's sessions for one project
+AgentSessions.projects(:codex)                # distinct recorded project paths (reads headers)
+```
+
+Enumerating opencode needs the optional `sqlite3` gem; every other agent enumerates with the standard library alone.
+
 ## Roadmap
 
-- 0.2: enumerate sessions, map them to projects (`list`, `du`)
-- 0.3: read and normalize messages for the file-based agents
+- **0.2 (this release):** enumerate sessions, map them to projects (`list`, `du`)
+- **0.3 (next):** read and normalize messages for the file-based agents
 - 0.4: SQLite readers (opencode, Cursor) via optional `sqlite3`
 - 0.5: `export` with secret redaction
 

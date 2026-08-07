@@ -116,6 +116,25 @@ module AgentSessions
       adapter_for(agent).new(env: env).project_paths
     end
 
+    # Companion to `projects`/`project_paths`, which both exclude a session
+    # whose project could not be resolved rather than counting it (design doc
+    # section 7) — so "this agent genuinely records no projects" and "this
+    # agent's project resolution is broken" read identically from the
+    # outside. Three of seven adapters can legitimately return a nil
+    # project_path (Amp threads with no `trees`, cursor_ide by design, pi
+    # whenever its unverified header assumption is wrong); this counts it for
+    # any of them, uniformly, using only the public `sessions` enumerator —
+    # no adapter needs to know this exists. Eager and a second full sweep of
+    # the store, same cost class as `projects` itself, so it is opt-in
+    # (called by the CLI only under `list --project`, never under plain
+    # `list`) rather than folded into `projects`' own return value, which is
+    # a documented, tested plain Array and would otherwise need a shape
+    # change to carry both numbers.
+    # Raises MissingDependency or UnreadableStore for opencode, as sessions does.
+    def unresolved_project_count(agent, env: ENV)
+      adapter_for(agent).new(env: env).sessions.count { |session| session.project_path.nil? }
+    end
+
     def verify(agent = nil, env: ENV)
       targets = agent ? [adapter_for(agent)] : registry.values
       targets.flat_map { |klass| klass.new(env: env).verify }

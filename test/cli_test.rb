@@ -263,6 +263,39 @@ class CLITest < Minitest::Test
     end
   end
 
+  # A fake agent whose sessions never resolve a project (Base's default
+  # project_path_for hook, undeclared here) must announce itself under
+  # --project, the one list mode that already pays to read project_path
+  # (decision 12) — a claude session that DOES resolve must not be counted
+  # alongside it, which is what the exact "1 sessions" (not 2) pins.
+  def test_list_project_reports_unresolved_project_count_on_stderr
+    with_home do |home, env|
+      claude_fixture(home, project: "/Users/you/app")
+      touch(home, ".fake", "sessions", "unresolved.jsonl")
+      AgentSessions.register(FakeAdapter)
+      _, _, err = run_cli("list", "--project", "/Users/you/app", env: env)
+      assert_includes err, "1 sessions with unresolved project"
+    end
+  ensure
+    AgentSessions.registry.delete(:fake)
+  end
+
+  # A plain `list` (no --project) must never pay for a project_path read —
+  # session_row deliberately omits the column for exactly this reason — so
+  # the unresolved-project note must not appear even when an agent's
+  # sessions would trip it under --project.
+  def test_list_without_project_never_reports_unresolved_project_count
+    with_home do |home, env|
+      claude_fixture(home)
+      touch(home, ".fake", "sessions", "unresolved.jsonl")
+      AgentSessions.register(FakeAdapter)
+      _, _, err = run_cli("list", env: env)
+      refute_includes err, "unresolved project"
+    end
+  ensure
+    AgentSessions.registry.delete(:fake)
+  end
+
   def test_list_json_rows_omit_project_path_and_format_times
     with_home do |home, env|
       claude_fixture(home)
@@ -289,6 +322,44 @@ class CLITest < Minitest::Test
       expected_keys = %w[agent id uid path started_at updated_at bytes format fidelity]
       assert_equal expected_keys.sort, row.keys.sort
     end
+  end
+
+  # Step 3b (Task 12 review): confirms jsonable's String scrub covers `path`,
+  # not only `project_path`/`group`. On this machine (macOS/APFS) a filename
+  # cannot actually carry invalid UTF-8 -- Errno::EILSEQ at write time -- so
+  # a real fixture file can't reproduce a Linux filename doing this. Built
+  # in-memory instead, the same way test_du_by_project_json_survives_invalid_
+  # utf8_in_a_recorded_project_path constructs its bad string by hand rather
+  # than through a JSON round-trip that would itself raise.
+  def test_list_json_survives_invalid_utf8_in_path
+    bad_path = Class.new(AgentSessions::Adapters::Base) do
+      agent :bad_path
+      label "Bad path"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.bad_path"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions
+        [AgentSessions::Session.new(agent: :bad_path, id: "p1", path: "/x/y-\xFF.jsonl", project_path: nil,
+                                    started_at: nil, updated_at: Time.now, bytes: 1,
+                                    format: :jsonl, fidelity: :full)].lazy
+      end
+    end
+    AgentSessions.register(bad_path)
+
+    with_home do |_home, env|
+      status, out, = run_cli("list", "--json", env: env)
+      assert_equal 0, status
+
+      rows = JSON.parse(out)
+      row = rows.find { |r| r["agent"] == "bad_path" }
+      refute_nil row, "expected the malformed-path session's row:\n#{out}"
+      assert_equal "/x/y-?.jsonl", row.fetch("path"), "the invalid byte must be scrubbed, not dropped silently"
+    end
+  ensure
+    AgentSessions.registry.delete(:bad_path)
   end
 
   # opencode's Session#bytes is nil (design decision 7: a session is rows in a

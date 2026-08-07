@@ -717,8 +717,16 @@ class CLITest < Minitest::Test
                                     format: :sqlite, fidelity: :full)].lazy
       end
     end
-    AgentSessions.register(big_unknown)
+    # Registered SMALL-before-big deliberately: group_by (and AgentSessions.agents,
+    # which drives collect_sessions) walks registration order, so without the
+    # count tiebreaker the natural fallback order is already
+    # ["claude", "small_unknown", "big_unknown"] — identical to what a correct
+    # tiebreaker also produces if the fixture registers big first. Registering
+    # small first makes the two hypotheses disagree: only the actual tiebreaker
+    # logic reorders small_unknown behind big_unknown; deleting `.sort_by`
+    # entirely, or dropping just the count key, both leave small_unknown first.
     AgentSessions.register(small_unknown)
+    AgentSessions.register(big_unknown)
 
     with_home do |home, env|
       claude_fixture(home)
@@ -909,5 +917,226 @@ class CLITest < Minitest::Test
     end
   ensure
     AgentSessions.registry.delete(:broken_and_warned)
+  end
+
+  # Isolates the `- reporting` half of the exclusion (the `- @skipped_agents`
+  # half already has its own test above): an agent that is installed, carries
+  # a gated warning, AND actually contributed rows must not also get the
+  # zero-rows note. On the real machine this is codex/amp/opencode territory —
+  # all three are installed, all three carry a warning, and dropping
+  # `- reporting` would print "codex: installed but contributed 0 sessions
+  # here" directly above a row reading "codex 414 287.5 MB".
+  def test_du_does_not_flag_a_gated_warning_agent_that_actually_reported_rows
+    flagged = Class.new(AgentSessions::Adapters::Base) do
+      agent :flagged_with_rows
+      label "Flagged with rows"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.flagged_with_rows"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def warnings
+        list = super
+        list << "gated warning" if primary_layer.exists?
+        list
+      end
+    end
+    AgentSessions.register(flagged)
+
+    with_home do |home, env|
+      write(JSON.generate({ type: "attachment" }), home, ".flagged_with_rows", "sessions", "s1.jsonl")
+      claude_fixture(home)
+      _, out, err = run_cli("du", env: env)
+      assert_includes out, "flagged_with_rows"
+      refute_includes err, "contributed 0 sessions"
+    end
+  ensure
+    AgentSessions.registry.delete(:flagged_with_rows)
+  end
+
+  # The warning count in the stderr note must reflect the agent's ACTUAL
+  # warnings, not a hardcoded number — this agent carries two (one permanent,
+  # one gated) so a survivor that hardcodes "(1 warning(s))" or "(0
+  # warning(s))" fails here even though it would pass every other du test,
+  # each of which happens to use a single-warning fixture.
+  def test_du_gated_warning_note_reports_the_actual_warning_count
+    flagged = Class.new(AgentSessions::Adapters::Base) do
+      agent :flagged_two_warnings
+      label "Flagged two warnings"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.flagged_two_warnings"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      warning "an always-present warning"
+
+      def warnings
+        list = super
+        list << "a second, gated warning" if primary_layer.exists?
+        list
+      end
+    end
+    AgentSessions.register(flagged)
+
+    with_home do |home, env|
+      touch(home, ".flagged_two_warnings", "sessions", ".keep")
+      claude_fixture(home)
+      _, _, err = run_cli("du", env: env)
+      assert_includes err, "(2 warning(s))"
+    end
+  ensure
+    AgentSessions.registry.delete(:flagged_two_warnings)
+  end
+
+  # Reproduces the live crash: a recorded cwd carrying invalid UTF-8 (a raw
+  # byte, not something JSON.generate could have produced itself — it has to
+  # be written directly, the way a malformed real session log would arrive)
+  # used to reach JSON.pretty_generate unscrubbed and raise
+  # JSON::GeneratorError, which is not an AgentSessions::Error and so escaped
+  # the CLI's top-level rescue entirely. du --by project is the first path
+  # that puts a recorded cwd into a JSON value at all (list omits
+  # project_path — decision 12), which is what made this reachable only here.
+  def test_du_by_project_json_survives_invalid_utf8_in_a_recorded_project_path
+    with_home do |home, env|
+      path = File.join(home, ".claude", "projects", "-Users-you-app", "bad.jsonl")
+      FileUtils.mkdir_p(File.dirname(path))
+      # Written directly, bypassing JSON.generate: JSON.generate itself raises
+      # on a String carrying invalid UTF-8, so this is not producible through
+      # this codebase's own writers -- exactly why it has to be constructed by
+      # hand to stand in for a malformed real-world session log.
+      File.write(path, "{\"type\":\"attachment\",\"cwd\":\"/Users/you/app-\xFF\"}")
+
+      status, out, = run_cli("du", "--by", "project", "--json", env: env)
+      assert_equal 0, status
+
+      rows = JSON.parse(out)
+      row = rows.find { |r| r["group"].start_with?("/Users/you/app-") }
+      refute_nil row, "expected the malformed-cwd session's project row:\n#{out}"
+      assert_equal "/Users/you/app-?", row.fetch("group"), "the invalid byte must be scrubbed, not dropped silently"
+    end
+  end
+
+  # Two sessions sharing a project must MERGE into one row with count == 2 —
+  # the previous project-grouping tests only ever used one session per
+  # project, so grouping (as opposed to a 1:1 listing) was never actually
+  # exercised. The regex is anchored end to end, the same way the --by agent
+  # totals test is, so appending anything to the group key (an agent name
+  # suffix, say) fails this test even though it would still pass a plain
+  # assert_includes.
+  def test_du_by_project_merges_multiple_sessions_into_one_row
+    with_home do |home, env|
+      path_a = claude_fixture(home, project: "/Users/you/app", id: "m1")
+      path_b = claude_fixture(home, project: "/Users/you/app", id: "m2")
+      _, out, = run_cli("du", "--by", "project", env: env)
+
+      expected = AgentSessions::CLI.new([]).send(:human_bytes, File.size(path_a) + File.size(path_b))
+      line = out.lines.find { |l| l.include?("/Users/you/app") }
+      refute_nil line, "expected a merged row for the shared project:\n#{out}"
+      assert_match(/\A\/Users\/you\/app\s+2\s+#{Regexp.escape(expected)}\z/, line.chomp)
+    end
+  end
+
+  # The --json equivalent of the merge test above, with an exact (not
+  # substring) match on the group key — closes the gap a mutation that
+  # appends extra characters to the group (an agent name, say) would sail
+  # through under assert_includes.
+  def test_du_by_project_json
+    with_home do |home, env|
+      path_a = claude_fixture(home, project: "/Users/you/app", id: "j1")
+      path_b = claude_fixture(home, project: "/Users/you/other", id: "j2")
+      _, out, = run_cli("du", "--by", "project", "--json", env: env)
+      rows = JSON.parse(out)
+
+      app_row = rows.find { |r| r["group"] == "/Users/you/app" }
+      other_row = rows.find { |r| r["group"] == "/Users/you/other" }
+      refute_nil app_row, "expected an exact-match row for /Users/you/app:\n#{out}"
+      refute_nil other_row, "expected an exact-match row for /Users/you/other:\n#{out}"
+      assert_equal 1, app_row.fetch("sessions")
+      assert_equal File.size(path_a), app_row.fetch("bytes")
+      assert_equal 1, other_row.fetch("sessions")
+      assert_equal File.size(path_b), other_row.fetch("bytes")
+    end
+  end
+
+  # A long project path must be elided in the TEXT table (the same mechanism
+  # `list` already applies to Cursor's 73-char ids), so a du --by project row
+  # cannot wrap an 80-column terminal the way an unbounded 169-char path did
+  # on the real machine. The JSON payload must NOT be elided -- callers that
+  # need the exact path (feeding it back into --project, say) need the real
+  # thing, not a display truncation.
+  def test_du_by_project_elides_long_paths_in_the_table_but_not_in_json
+    with_home do |home, env|
+      long_project = "/Users/you/#{"a" * 40}/#{"b" * 40}/leaf"
+      claude_fixture(home, project: long_project, id: "long1")
+
+      _, out, = run_cli("du", "--by", "project", env: env)
+      lines = out.lines.map(&:chomp)
+      refute(lines.any? { |l| l.include?(long_project) }, "the full, unelided path must not reach the table:\n#{out}")
+      assert(lines.any? { |l| l.include?("…") }, "expected an elided row:\n#{out}")
+      assert(lines.all? { |l| l.length <= 80 }, "a row must not wrap an 80-column terminal:\n#{out}")
+
+      _, json_out, = run_cli("du", "--by", "project", "--json", env: env)
+      rows = JSON.parse(json_out)
+      assert(rows.any? { |r| r["group"] == long_project }, "JSON must keep the full, unelided path")
+    end
+  end
+
+  # Isolates the TOTAL row's own contribution to every column's width: TOTAL's
+  # count (10) is wider than either data row's (9 and 1), and TOTAL's bytes
+  # cell ("10 B") is wider than either data row's ("9 B" / "1 B"). If
+  # print_du_table computed widths from `rows` alone and only appended TOTAL
+  # afterward, TOTAL's own line would be the one that's a different length —
+  # this pins the exact three lines, not just "all equal length", so it also
+  # catches a rjust/ljust swap on either the count or the bytes column, not
+  # just a missing pad.
+  def test_du_widens_every_column_to_fit_the_total_row
+    nine = Class.new(AgentSessions::Adapters::Base) do
+      agent :nine
+      label "Nine"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.nine"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions
+        Array.new(9) do |i|
+          AgentSessions::Session.new(agent: :nine, id: "n#{i}", path: "/n#{i}", project_path: nil,
+                                      started_at: nil, updated_at: Time.now, bytes: 1,
+                                      format: :sqlite, fidelity: :full)
+        end.lazy
+      end
+    end
+    one = Class.new(AgentSessions::Adapters::Base) do
+      agent :one
+      label "One"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.one"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions
+        [AgentSessions::Session.new(agent: :one, id: "o0", path: "/o0", project_path: nil,
+                                    started_at: nil, updated_at: Time.now, bytes: 1,
+                                    format: :sqlite, fidelity: :full)].lazy
+      end
+    end
+    AgentSessions.register(nine)
+    AgentSessions.register(one)
+
+    with_home do |_home, env|
+      _, out, = run_cli("du", env: env)
+      lines = out.lines.map(&:chomp)
+
+      assert_equal "nine    9   9 B", lines.find { |l| l.start_with?("nine") }
+      assert_equal "one     1   1 B", lines.find { |l| l.start_with?("one") }
+      assert_equal "TOTAL  10  10 B", lines.find { |l| l.start_with?("TOTAL") }
+    end
+  ensure
+    AgentSessions.registry.delete(:nine)
+    AgentSessions.registry.delete(:one)
   end
 end

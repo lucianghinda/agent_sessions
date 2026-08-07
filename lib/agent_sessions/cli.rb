@@ -13,7 +13,6 @@ module AgentSessions
       @stdout = stdout
       @stderr = stderr
       @now = now
-      @agents_skipped = false
       @skipped_agents = []
     end
 
@@ -152,7 +151,14 @@ module AgentSessions
             bytes: row[:unknown] == row[:count] ? nil : row[:known_bytes],
             unknown_sessions: row[:unknown] }
         end
-        @stdout.puts JSON.pretty_generate(payload)
+        # Every other JSON-emitting command (list, where, doctor, audit)
+        # funnels through jsonable; this one is `group:`, a recorded cwd
+        # under --by project, was going straight to JSON.pretty_generate and
+        # crashing on the first invalid-UTF-8 path. jsonable's Hash branch is
+        # transform_values, so this covers group: (and sessions/bytes/
+        # unknown_sessions, unaffected since they are not Strings) the same
+        # way emit_json covers every other command's payload.
+        @stdout.puts JSON.pretty_generate(payload.map { |row| jsonable(row) })
       else
         print_du_table(rows, sessions)
       end
@@ -242,6 +248,16 @@ module AgentSessions
       when Data then jsonable(value.to_h)
       when Date then value.iso8601
       when Time then value.iso8601
+      # JSON.parse happily hands back a String carrying invalid UTF-8 (a raw
+      # \xFF in a session log, say), and JSON.generate then raises
+      # JSON::GeneratorError on it — not an AgentSessions::Error, so it
+      # escapes `run`'s rescue and takes the whole command down with a raw
+      # backtrace over one malformed file. du --by project is the first path
+      # that puts a recorded cwd straight into a JSON value (list omits
+      # project_path entirely — decision 12), which is what makes this
+      # reachable today. A no-op for the well-formed data every other value
+      # here already is.
+      when String then value.scrub("?")
       else value
       end
     end
@@ -250,7 +266,7 @@ module AgentSessions
 
     # One agent's missing dependency or unreadable store must not silently empty
     # a cross-agent listing — each skip is announced on stderr, tracked in
-    # @agents_skipped so the command can exit non-zero, and the rest still
+    # @skipped_agents so the command can exit non-zero, and the rest still
     # print. The exit code matters as much as the stderr line: `--json` is the
     # door built for a machine consumer (design doc section 12), and a machine
     # reading `[]` next to exit 0 has no way to tell "empty store" from
@@ -307,7 +323,6 @@ module AgentSessions
                  end
         scoped.force
       rescue MissingDependency, UnreadableStore => e
-        @agents_skipped = true
         @skipped_agents << agent
         @stderr.puts "#{agent}: skipped (#{e.message})"
         []
@@ -316,9 +331,13 @@ module AgentSessions
 
     # Shared by list and du (Task 11), both of which call collect_sessions:
     # a skip must flip the exit code even though the rest of the output still
-    # printed successfully.
+    # printed successfully. One list, not a list plus a boolean that mirrors
+    # it: two variables recording the same fact (an earlier draft had
+    # @agents_skipped alongside @skipped_agents) are one rename away from
+    # silently disagreeing, which is exactly the failure mode decision 11a
+    # exists to prevent.
     def exit_code_honoring_skips
-      @agents_skipped ? 1 : 0
+      @skipped_agents.empty? ? 0 : 1
     end
 
     # `list claude` looks like it worked: it silently lists every agent's
@@ -358,11 +377,19 @@ module AgentSessions
     # since the ends are what a human matches against a directory name.
     ID_COLUMN_MAX = 38
 
-    def elide(id)
-      return id if id.length <= ID_COLUMN_MAX
+    # Group names in `du --by project` are the same shape of problem one cap
+    # wider: a real project path on this machine ran 169 characters, wrapping
+    # every row across three lines on an 80-column terminal (list's own id
+    # column tops out at 72 total). Wider than ID_COLUMN_MAX because a path's
+    # head (which user, which drive) and tail (the actual project directory)
+    # are both worth keeping, and both need more room than a bare uuid does.
+    GROUP_COLUMN_MAX = 60
 
-      keep = (ID_COLUMN_MAX - 1) / 2
-      "#{id[0, keep]}…#{id[-keep..]}"
+    def elide(text, max = ID_COLUMN_MAX)
+      return text if text.length <= max
+
+      keep = (max - 1) / 2
+      "#{text[0, keep]}…#{text[-keep..]}"
     end
 
     def print_session_table(rows)
@@ -398,13 +425,16 @@ module AgentSessions
       return if rows.empty?
 
       all_rows = rows + [du_row("TOTAL", sessions)]
-      name_width = all_rows.map { |row| row[:group].length }.max
+      # Elided for display only — the underlying row[:group] (and the JSON
+      # payload built from the same rows) keeps the full, unelided path.
+      display_names = all_rows.map { |row| elide(row[:group], GROUP_COLUMN_MAX) }
+      name_width = display_names.map(&:length).max
       count_width = all_rows.map { |row| row[:count].to_s.length }.max
       size_cells = all_rows.map { |row| du_bytes_cell(row) }
       size_width = size_cells.map(&:length).max
       all_rows.each_with_index do |row, index|
         @stdout.puts [
-          row[:group].ljust(name_width),
+          display_names[index].ljust(name_width),
           row[:count].to_s.rjust(count_width),
           size_cells[index].rjust(size_width)
         ].join("  ")
@@ -420,6 +450,14 @@ module AgentSessions
     # The "+" says "incomplete" but not "by how much" — deliberate. The text
     # table stays a one-glance summary; a consumer that needs the exact gap
     # already has --json, whose payload carries unknown_sessions per row.
+    #
+    # The plan's own sketch of this guarded the "?" branch with
+    # row[:count].positive? too. Dropped here, disclosed rather than silently
+    # omitted: du_row's `count` is a group's own group_by size, which
+    # group_by never returns as zero, so that guard cannot be false in
+    # practice. Kept out rather than kept "just in case" — a condition
+    # nothing can make false is a claim about a guarantee elsewhere, not a
+    # check this method needs to make itself.
     def du_bytes_cell(row)
       return "?" if row[:unknown] == row[:count]
 
@@ -438,6 +476,14 @@ module AgentSessions
     # symptom worth a line. Also skips any agent collect_sessions already
     # reported skipped above, whose stderr line already explains the zero
     # rows for a different, already-visible reason.
+    #
+    # Deliberately does NOT flip the exit code the way a skip does (decision
+    # 11a): a skip means the printed total is silently WRONG (an agent's
+    # bytes are simply missing from it), which is the failure decision 11a
+    # exists to catch. A warned-but-empty agent's total is still RIGHT — it
+    # correctly reports zero for that agent — merely unexplained without this
+    # line. Exit 0 says the numbers are trustworthy; the stderr line is a
+    # pointer to more context, not a correction to them.
     def warn_zero_row_gated_agents(sessions)
       reporting = sessions.map(&:agent).uniq
       (AgentSessions.agents - @skipped_agents - reporting).each do |agent|

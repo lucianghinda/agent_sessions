@@ -11,7 +11,7 @@ folded into this entry rather than shipping a changelog with two consecutive
 - `Location#files` replaces `matches`, aware of single-file layers (`single_file`, `enumerable?`)
 - opencode session enumeration via a deferred read-only SQLite query, behind an **optional** `sqlite3` gem — the gemspec stays runtime-dependency-free
 - CLI: `where`, `doctor`, `audit`, `list` (`--agent`, `--project`, `--since`), and `du` (`--by agent|project`), all with `--json` output
-- `verify`, `doctor`
 - Amp's `secrets.json` is now optional: a missing file reports drift, not failure
 - `verify`'s skip gate now keys on store existence, not base-dir existence
 - `doctor` takes its agent positionally, matching `where`
+- `list`/`du` now exit non-zero when any agent's store had to be skipped, instead of exiting 0 with only a stderr notice

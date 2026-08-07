@@ -13,6 +13,7 @@ module AgentSessions
       @stdout = stdout
       @stderr = stderr
       @now = now
+      @agents_skipped = false
     end
 
     def run
@@ -92,6 +93,7 @@ module AgentSessions
         end
         opts.on("--json", "Output JSON") { options[:json] = true }
       end.permute!(@argv)
+      reject_positional_args!("list")
 
       rows = collect_sessions(options).sort_by(&:updated_at).reverse
       if options[:json]
@@ -99,7 +101,7 @@ module AgentSessions
       else
         print_session_table(rows)
       end
-      0
+      exit_code_honoring_skips
     end
 
     def audit
@@ -192,34 +194,87 @@ module AgentSessions
     SINCE_UNITS = { "h" => 3600, "d" => 86_400, "w" => 604_800 }.freeze
 
     # One agent's missing dependency or unreadable store must not silently empty
-    # a cross-agent listing — each skip is announced on stderr and the rest still
-    # print. UnreadableStore became reachable here in Task 8: opencode raises it
-    # for a corrupt database, a non-writable store directory, or a writer stuck
-    # past busy_timeout, and without this clause one of those costs the user the
-    # other six agents' rows.
+    # a cross-agent listing — each skip is announced on stderr, tracked in
+    # @agents_skipped so the command can exit non-zero, and the rest still
+    # print. The exit code matters as much as the stderr line: `--json` is the
+    # door built for a machine consumer (design doc section 12), and a machine
+    # reading `[]` next to exit 0 has no way to tell "empty store" from
+    # "store I couldn't read" — the skip notice lives on stderr, which a
+    # machine consumer of stdout JSON has every reason to discard. Decision 11
+    # calls silent under-reporting this gem's worst failure mode; a truthful
+    # message nobody who needs it ever sees is a milder version of the same
+    # failure. UnreadableStore became reachable here in Task 8: opencode
+    # raises it for a corrupt database, a non-writable store directory, or a
+    # writer stuck past busy_timeout, and without this clause one of those
+    # costs the user the other six agents' rows.
     #
-    # .force materializes each agent's full matching set before this method
-    # returns, and applying --since here (rather than pushing it into the
-    # adapter) means every session in the store still gets stat'd to learn its
-    # updated_at even when the time window keeps almost none of them — measured
-    # against this machine's real stores (see Task 10 report): ~360-session
-    # Codex and opencode stores both filter in well under 50ms, so the cost is
-    # real but not currently worth adapter-level plumbing. Revisit if a store
-    # grows enough to make that untrue.
+    # `list` always sorts newest-first, so the whole matching set must be
+    # materialized before anything can print, no matter how lazy the pipeline
+    # underneath is — sorting is what forces that, not .force. The separate,
+    # real cost is STAT COUNT, not laziness: for the six file-based adapters,
+    # even a narrow --since window still stats every file in the store,
+    # because updated_at can only be learned by stating it (nothing here
+    # pushes the window into the adapter, though Codex's date-partitioned
+    # directories are a structural hint that could). opencode is the
+    # exception, and in the OTHER direction from what an early draft of this
+    # comment claimed: it never stats a file — it answers from a SQL query —
+    # so it pays no per-session stat cost regardless of --since; `since:`
+    # below just filters whatever the query already returned, in Ruby, not in
+    # a WHERE clause. Measured against this machine's real stores: the full
+    # `list` sweep across all seven agents (~900 real sessions) is 0.021s, so
+    # none of this is worth adapter-level plumbing yet. Revisit if a store
+    # grows enough to change that.
+    #
+    # The non-project path delegates to AgentSessions.sessions(since:), which
+    # already implements and documents this exact >=-inclusive comparison —
+    # duplicating it here would let the two drift. The --project path can't
+    # reuse it (for_project takes no since:), so it filters inline; both
+    # express the identical comparison, just through different plumbing.
+    #
+    # Plan follow-up 9 ("a one-line stderr note when a gated-warning agent
+    # contributes zero rows would put the message where the symptom is —
+    # decide in Task 10") is considered here and deferred to Task 11's `du`.
+    # Six of seven adapters' warnings name the symptom as "projects or
+    # du --by project report nothing", which is du's territory, not list's.
+    # Surfacing it also needs a fact list doesn't otherwise fetch — whether
+    # the store is INSTALLED at all (Store#installed?, via locate()) versus
+    # installed-but-warned-and-genuinely-empty, since zero rows from an agent
+    # nobody has ever used is not a symptom worth a line. Doing that lookup
+    # here would mean doing it again once Task 11 lands its own version.
     def collect_sessions(options)
       agents = options[:agent] ? [options[:agent]] : AgentSessions.agents
       agents.flat_map do |agent|
         scoped = if options[:project]
-                   AgentSessions.for_project(options[:project], env: @env, agents: [agent])
+                   sessions = AgentSessions.for_project(options[:project], env: @env, agents: [agent])
+                   options[:since] ? sessions.select { |session| session.updated_at >= options[:since] } : sessions
                  else
-                   AgentSessions.sessions(agent, env: @env)
+                   AgentSessions.sessions(agent, env: @env, since: options[:since])
                  end
-        scoped = scoped.select { |session| session.updated_at >= options[:since] } if options[:since]
         scoped.force
       rescue MissingDependency, UnreadableStore => e
+        @agents_skipped = true
         @stderr.puts "#{agent}: skipped (#{e.message})"
         []
       end
+    end
+
+    # Shared by list and du (Task 11), both of which call collect_sessions:
+    # a skip must flip the exit code even though the rest of the output still
+    # printed successfully.
+    def exit_code_honoring_skips
+      @agents_skipped ? 1 : 0
+    end
+
+    # `list claude` looks like it worked: it silently lists every agent's
+    # sessions instead of erroring on the typo, because list takes no bare
+    # positional (decision 10 — three filters need names) while where and
+    # doctor take exactly one. That similarity is what makes the typo
+    # tempting to type. du (Task 11) takes the same flags-only shape, so this
+    # check is shared rather than inlined into list alone.
+    def reject_positional_args!(command)
+      return if @argv.empty?
+
+      raise Error, "#{command}: unexpected argument #{@argv.first.inspect} (this command takes flags only)"
     end
 
     def parse_since(value)
@@ -239,10 +294,11 @@ module AgentSessions
       }
     end
 
-    # Cap the id column. Cursor's ids are two nested uuids joined by "/", so one
-    # Cursor row makes the global id_width 73 where every other agent needs 38 —
-    # padding all their rows with ~35 spaces and pushing the line to 108 chars,
-    # which wraps on an 80-column terminal. Elide the middle and keep both ends,
+    # Cap the id column. Cursor's ids are two nested uuids joined by "/" (36 +
+    # 1 + 36 = 73 chars) where every other agent needs a bare uuid (36) or
+    # less, so one Cursor row makes the global id_width 73 — padding every
+    # other row with ~35 spaces and pushing the line past 100 chars, which
+    # wraps on an 80-column terminal. Elide the middle and keep both ends,
     # since the ends are what a human matches against a directory name.
     ID_COLUMN_MAX = 38
 
@@ -258,12 +314,14 @@ module AgentSessions
 
       agent_width = rows.map { |session| session.agent.to_s.length }.max
       id_width = rows.map { |session| elide(session.id).length }.max
-      rows.each do |session|
+      size_cells = rows.map { |session| bytes_cell(session.bytes) }
+      size_width = size_cells.map(&:length).max
+      rows.each_with_index do |session, index|
         @stdout.puts [
           session.agent.to_s.ljust(agent_width),
           elide(session.id).ljust(id_width),
           session.updated_at.strftime("%Y-%m-%d %H:%M"),
-          bytes_cell(session.bytes)
+          size_cells[index].rjust(size_width)
         ].join("  ")
       end
     end

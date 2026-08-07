@@ -121,4 +121,115 @@ class CLITest < Minitest::Test
       assert_equal 1, offsets.uniq.size, out
     end
   end
+
+  def claude_fixture(home, project: "/Users/you/app", id: "aa11", mtime: Time.now)
+    encoded = project.gsub(/[^a-zA-Z0-9]/, "-")
+    line = JSON.generate({ type: "attachment", cwd: project })
+    path = write(line, home, ".claude", "projects", encoded, "#{id}.jsonl")
+    FileUtils.touch(path, mtime: mtime)
+    path
+  end
+
+  def test_list_shows_sessions_newest_first
+    with_home do |home, env|
+      claude_fixture(home, id: "older", mtime: Time.now - 7200)
+      claude_fixture(home, id: "newer", mtime: Time.now)
+      status, out, = run_cli("list", env: env)
+      assert_equal 0, status
+      assert out.index("newer") < out.index("older"), "expected newest first:\n#{out}"
+      assert_includes out, "claude"
+    end
+  end
+
+  def test_list_agent_flag_scopes_to_one_agent
+    with_home do |home, env|
+      claude_fixture(home)
+      # A full uuid is required here: Codex's FILENAME regex (Task 4) only
+      # recognizes rollout-<timestamp>-<8-4-4-4-12 hex uuid>.jsonl. A short
+      # placeholder like "u1" would silently fall back to the basename id,
+      # which would still make this particular test pass (it only checks the
+      # agent column) but would no longer be a faithful Codex fixture.
+      codex_uuid = "11111111-1111-1111-1111-111111111111"
+      write(JSON.generate({ type: "session_meta", payload: { cwd: "/x" } }),
+            home, ".codex", "sessions", "2026", "07", "21", "rollout-2026-07-21T01-02-03-#{codex_uuid}.jsonl")
+      _, out, = run_cli("list", "--agent", "codex", env: env)
+      refute_includes out, "claude"
+      assert_includes out, "codex"
+    end
+  end
+
+  def test_list_since_filters_out_old_sessions
+    with_home do |home, env|
+      claude_fixture(home, id: "ancient", mtime: Time.now - (3 * 86_400))
+      claude_fixture(home, id: "recent", mtime: Time.now)
+      _, out, = run_cli("list", "--since", "1d", env: env)
+      assert_includes out, "recent"
+      refute_includes out, "ancient"
+    end
+  end
+
+  def test_list_rejects_a_malformed_since
+    with_home do |_home, env|
+      status, _, err = run_cli("list", "--since", "fortnight", env: env)
+      assert_equal 1, status
+      assert_includes err, "fortnight"
+    end
+  end
+
+  def test_list_project_filters_across_agents
+    with_home do |home, env|
+      claude_fixture(home, project: "/Users/you/app", id: "inproj")
+      claude_fixture(home, project: "/Users/you/other", id: "outproj")
+      _, out, = run_cli("list", "--project", "/Users/you/app", env: env)
+      assert_includes out, "inproj"
+      refute_includes out, "outproj"
+    end
+  end
+
+  def test_list_json_rows_omit_project_path_and_format_times
+    with_home do |home, env|
+      claude_fixture(home)
+      _, out, = run_cli("list", "--json", env: env)
+      rows = JSON.parse(out)
+      assert_equal 1, rows.size
+      row = rows.first
+      assert_equal "claude", row.fetch("agent")
+      assert_equal "claude:aa11", row.fetch("uid")
+      refute row.key?("project_path"), "listing must stay stat-only; project_path forces a read"
+      assert_match(/\A\d{4}-\d{2}-\d{2}T/, row.fetch("updated_at"))
+    end
+  end
+
+  def test_list_reports_skipped_agents_instead_of_silently_omitting_them
+    blocked = Class.new(AgentSessions::Adapters::Base) do
+      agent :blocked
+      label "Blocked"
+      documented true
+      verified_on "2026-07-01"
+      fidelity :full
+      base_dir default: "~/.blocked"
+      store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
+
+      def sessions = raise AgentSessions::MissingDependency, "needs a gem"
+    end
+    AgentSessions.register(blocked)
+
+    with_home do |home, env|
+      claude_fixture(home)
+      status, out, err = run_cli("list", env: env)
+      assert_equal 0, status
+      assert_includes out, "claude"
+      assert_includes err, "blocked: skipped (needs a gem)"
+    end
+  ensure
+    AgentSessions.registry.delete(:blocked)
+  end
+
+  def test_list_of_nothing_is_quietly_empty
+    with_home do |_home, env|
+      status, out, = run_cli("list", env: env)
+      assert_equal 0, status
+      assert_equal "", out
+    end
+  end
 end

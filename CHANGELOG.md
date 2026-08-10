@@ -1,4 +1,4 @@
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-08-10)
 
 First public release. 0.1.0 was never tagged or published, so its work is
 folded into this entry rather than shipping a changelog with two consecutive

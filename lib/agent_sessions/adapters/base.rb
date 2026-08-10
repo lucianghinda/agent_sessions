@@ -142,7 +142,7 @@ module AgentSessions
                        "#{primary_layer.path} has no known layout to enumerate"
         end
 
-        primary_layer.files.lazy.filter_map { |path| build_session(path) }
+        enumerate(primary_layer.files)
       end
 
       # Match by RECORDED cwd, exact, per session (design doc section 7,
@@ -256,6 +256,17 @@ module AgentSessions
 
       def updated_at_for(_path, stat) = stat.mtime
 
+      # Bytes this session occupies on disk. The transcript alone for a store
+      # that keeps one file per session; an adapter whose agent writes sidecar
+      # files beside the transcript overrides this and adds them. Like the two
+      # time hooks it takes the stat the enumerator already holds, so the
+      # common case still costs nothing beyond the syscall already made.
+      #
+      # An override runs EAGERLY for every session, so it carries build_session's
+      # constraint: it must not raise on an unreadable path, or one bad sidecar
+      # takes down the whole listing rather than its own row.
+      def bytes_for(_path, stat) = stat.size
+
       def base_dir
         config = self.class.base_dir_config
         override = presence(config[:env] && @env[config[:env]])
@@ -282,6 +293,19 @@ module AgentSessions
       # The store sessions live in. Adapters declare it first, by convention.
       def primary_layer = layers.first
 
+      def layer(kind)
+        layers.find { |candidate| candidate.kind == kind }
+      end
+
+      # Turns paths into sessions, lazily. Extracted so an adapter whose agent
+      # writes sessions to more than one store can enumerate the others without
+      # copying `sessions`' guard clause — see Codex, which chains its archived
+      # store onto this. The glob behind `paths` has already run; what stays
+      # lazy is the stat and the hooks, which is where the per-session cost is.
+      def enumerate(paths)
+        paths.lazy.filter_map { |path| build_session(path) }
+      end
+
       # single_file is a property of the declaration, not of the resolved path: a
       # store-level env override replaces where the layer lives without changing
       # whether it is one file or a directory.
@@ -301,6 +325,14 @@ module AgentSessions
 
       def presence(value)
         value && !value.empty? ? value : nil
+      end
+
+      # Location#files escapes its own path for the reason its comment gives —
+      # a resolved path may legitimately contain glob metacharacters, and
+      # unescaped they are read as syntax and silently match nothing. An
+      # adapter globbing a path it was handed needs the same protection.
+      def escape_glob(path)
+        path.gsub(/[\\{}\[\]*?]/) { |char| "\\#{char}" }
       end
 
       def env_active?(name)
@@ -377,7 +409,7 @@ module AgentSessions
           path: path,
           started_at: started_at_for(path, stat),
           updated_at: updated_at_for(path, stat),
-          bytes: stat.size,
+          bytes: bytes_for(path, stat),
           format: primary_layer.format,
           fidelity: self.class.fidelity_value
         ) { project_path_for(path) }

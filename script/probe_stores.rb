@@ -42,7 +42,10 @@ CLAIMS = [
     agent: "claude", label: "Claude Code", documented: "yes", verified_on: "2026-08-05",
     base: { default: "~/.claude", env: "CLAUDE_CONFIG_DIR" },
     stores: [
-      { kind: "projects", dir: "projects", glob: "*/*.jsonl", format: "jsonl", required: true },
+      { kind: "projects", dir: "projects", glob: "*/*.jsonl", format: "jsonl", required: true,
+        note: "the glob is meant to miss <id>/subagents/ and <id>/tool-results/: those are one " \
+              "session's sidecar files, not sessions of their own. Their bytes count toward the " \
+              "parent session, so unmatched files here are expected, not drift." },
       { kind: "history", file: "history.jsonl", format: "jsonl", required: false }
     ]
   },
@@ -51,6 +54,8 @@ CLAIMS = [
     base: { default: "~/.codex", env: "CODEX_HOME" },
     stores: [
       { kind: "sessions", dir: "sessions", glob: "*/*/*/rollout-*.jsonl", format: "jsonl", required: true },
+      { kind: "archived", dir: "archived_sessions", glob: "rollout-*.jsonl", format: "jsonl", required: false,
+        note: "flat, unlike sessions/YYYY/MM/DD/. Enumerated as real sessions since 0.2.0." },
       { kind: "history", file: "history.jsonl", format: "jsonl", required: false },
       { kind: "index", file: "session_index.jsonl", format: "jsonl", required: false }
     ]
@@ -103,8 +108,6 @@ SUSPECTS = [
     note: "believed to be where Cursor IDE agent sessions really live (table cursorDiskKV)" },
   { agent: "cursor_ide", path: "~/.config/Cursor/User/globalStorage/state.vscdb",
     note: "Linux equivalent of the same suspected store" },
-  { agent: "codex", path: "~/.codex/archived_sessions",
-    note: "if present, sessions may be rotated out of the declared sessions/ tree" },
   { agent: "claude", path: "~/.claude/todos", note: "sibling state; not a transcript store, listed for shape only" },
   { agent: "amp", path: "~/Library/Application Support/amp", note: "macOS-native location the XDG default would miss" },
   { agent: "opencode", path: "~/Library/Application Support/opencode",
@@ -216,6 +219,21 @@ end
 
 def stamp(time)
   time ? time.strftime("%Y-%m-%d %H:%M") : "?"
+end
+
+# Wraps a claim note under a fixed label, so a long explanation stays inside
+# the same column as everything else the store prints.
+def wrap(text, label, width = 96)
+  indent = " " * label.length
+  words = text.split(" ")
+  lines = [label.dup]
+  words.each do |word|
+    if lines.last.length + word.length + 1 > width && lines.last.strip != label.strip
+      lines << indent.dup
+    end
+    lines.last << (lines.last.end_with?(" ") ? "" : " ") << word
+  end
+  lines
 end
 
 def plural(count, word, many = nil)
@@ -368,7 +386,7 @@ end
 
 def probe_store(path, store, reveal:)
   result = { path: path, kind: store[:kind], required: store[:required], format: store[:format],
-             glob: store[:glob], single_file: !store[:file].nil?, sync: [] }
+             glob: store[:glob], note: store[:note], single_file: !store[:file].nil?, sync: [] }
 
   unless File.exist?(path)
     result[:state] = :missing
@@ -558,6 +576,7 @@ probes.each do |probe|
     out << "  store  #{label}"
     out << "         path    #{display(store[:path])}"
     out << "         glob    #{store[:glob] ? store[:glob].inspect : "(none declared)"}"
+    wrap(store[:note], "         claim   ").each { |line| out << line } if store[:note]
 
     case store[:state]
     when :missing

@@ -12,6 +12,11 @@ module AgentSessions
       base_dir default: "~/.codex", env: "CODEX_HOME"
 
       store :sessions, dir: "sessions", glob: "*/*/*/rollout-*.jsonl", format: :jsonl
+      # Flat, unlike sessions/YYYY/MM/DD/ — the one real archived file found
+      # (2026-08-10) sat directly in the directory. Optional because most
+      # machines have never archived anything, so absence is drift, not a
+      # failed claim. Declared second so primary_layer stays `sessions`.
+      store :archived, dir: "archived_sessions", glob: "rollout-*.jsonl", format: :jsonl, optional: true
       store :history, path: "history.jsonl", format: :jsonl, optional: true
       store :index, path: "session_index.jsonl", format: :jsonl, optional: true
 
@@ -28,6 +33,22 @@ module AgentSessions
       # than falling back to the basename, where such a copy is at least
       # visibly non-canonical.
       FILENAME = /\Arollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\h{8}-\h{4}-\h{4}-\h{4}-\h{12})\.jsonl\z/
+
+      # Codex writes rollout files to two stores, and Base enumerates only the
+      # primary one. An archived session is still a session — a real one was
+      # found outside the sessions/ glob on 2026-08-10 — and a session the gem
+      # does not report is the silent under-reporting this design treats as its
+      # worst failure mode. Every filename hook below applies unchanged: the
+      # archived files carry the same rollout-<timestamp>-<uuid>.jsonl name.
+      #
+      # `super` first, so the guard it raises when the primary store has no
+      # known layout still fires, and so live sessions come out before archived
+      # ones. Chained rather than concatenated to keep the result lazy: a
+      # caller taking first(n) must not stat an archived file it never asked
+      # about.
+      def sessions
+        super.chain(enumerate(layer(:archived).files)).lazy
+      end
 
       def session_id_from(path)
         captures = FILENAME.match(File.basename(path))&.captures or return super

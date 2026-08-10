@@ -40,10 +40,13 @@ class CodexAdapterTest < Minitest::Test
   def override_env = { "CODEX_HOME" => "/custom/codex" }
   def expected_override_path = "/custom/codex/sessions"
 
-  def test_declares_history_and_index_as_optional_layers
+  # Order is part of the claim, not incidental: primary_layer is layers.first,
+  # so a store declared ahead of :sessions would silently redirect enumeration.
+  def test_declares_archived_history_and_index_as_optional_layers
     with_home do |_home, env|
       store = AgentSessions.locate(:codex, env: env)
-      assert_equal %i[sessions history index], store.layers.map(&:kind)
+      assert_equal %i[sessions archived history index], store.layers.map(&:kind)
+      assert_equal :sessions, store.effective.kind
     end
   end
 
@@ -177,6 +180,69 @@ class CodexAdapterTest < Minitest::Test
     end
   end
 
+  # Codex keeps a second, flat store of rollout files. Sweeping a real ~/.codex
+  # on 2026-08-10 found one there, outside the sessions/*/*/*/ glob: an archived
+  # session is still a session, and a session the gem does not report is this
+  # gem's worst failure mode.
+  def test_sessions_include_the_archived_store
+    with_home do |home, env|
+      build_fixture(home)
+      write_archived(home, "00000000-0000-4000-8000-00000000dead")
+
+      ids = AgentSessions::Adapters::Codex.new(env: env).sessions.force.map(&:id)
+      assert_includes ids, "00000000-0000-4000-8000-00000000dead"
+      assert_includes ids, FIXTURE_UUID
+    end
+  end
+
+  # The archived files are named exactly like the live ones, so every filename
+  # hook applies to them unchanged. Asserting the parsed id rather than the
+  # basename is what proves that, since a fallback would return the whole name.
+  def test_an_archived_session_parses_its_filename_like_a_live_one
+    with_home do |home, env|
+      write_archived(home, "00000000-0000-4000-8000-00000000beef")
+
+      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      assert_equal "00000000-0000-4000-8000-00000000beef", session.id
+      assert_equal Time.new(2026, 7, 21, 9, 12, 3), session.started_at
+    end
+  end
+
+  # Enumerating two stores must not force either of them. The conformance
+  # suite pins the return type; this pins that taking one session does not
+  # stat the rest, which is what a non-lazy concatenation would cost.
+  def test_enumerating_two_stores_stays_lazy
+    with_home do |home, env|
+      build_fixture(home)
+      write_archived(home, "00000000-0000-4000-8000-00000000cafe")
+
+      sessions = AgentSessions::Adapters::Codex.new(env: env).sessions
+      assert_instance_of Enumerator::Lazy, sessions
+      assert_equal 1, sessions.first(1).size
+    end
+  end
+
+  # Absent is the normal state: most machines have never archived anything.
+  # Drift, not failure — the same judgement the other optional stores make.
+  def test_a_missing_archived_store_reports_drift_not_failure
+    with_home do |home, env|
+      build_fixture(home)
+
+      check = AgentSessions.verify(:codex, env: env).find { |c| c.claim.include?("archived") }
+      refute_nil check, "expected verify to report the archived store"
+      assert_equal :drift, check.status
+    end
+  end
+
   private
 
+  # Flat, unlike sessions/YYYY/MM/DD/ — verified against a real
+  # ~/.codex/archived_sessions on 2026-08-10, which held its rollout file
+  # directly in the directory.
+  def write_archived(home, uuid)
+    meta = { type: "session_meta", timestamp: "2026-07-21T06:16:25.064Z",
+             payload: { id: uuid, cwd: "/Users/you/archived", cli_version: "0.0.0" } }
+    write(JSON.generate(meta), home, ".codex", "archived_sessions",
+          "rollout-2026-07-21T09-12-03-#{uuid}.jsonl")
+  end
 end

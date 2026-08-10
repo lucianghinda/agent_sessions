@@ -210,6 +210,67 @@ class ClaudeAdapterTest < Minitest::Test
     end
   end
 
+  # A Claude session is a transcript plus a sidecar directory named after it:
+  # subagents/ holds child agent transcripts, tool-results/ holds spilled tool
+  # output. Both are that session's bytes on disk. Counting only the transcript
+  # made `du` report 71% of what `audit` reported for the same store (122.1 MB
+  # against 173.0 MB, measured on a real store 2026-08-10) — two commands in
+  # one gem disagreeing about one directory.
+  def test_bytes_include_the_sidecar_directory
+    with_home do |home, env|
+      path = write_session(home, "-Users-you-app", expected_session_id, "/Users/you/app")
+      sidecar = File.join(File.dirname(path), expected_session_id)
+      write("a" * 100, sidecar, "subagents", "agent-0198fa3c1122.jsonl")
+      write("b" * 40, sidecar, "subagents", "agent-0198fa3c1122.meta.json")
+      write("c" * 60, sidecar, "tool-results", "hook-1-additionalContext.txt")
+
+      session = AgentSessions.sessions(:claude, env: env).first
+      assert_equal File.size(path) + 200, session.bytes
+    end
+  end
+
+  # FNM_DOTMATCH, for the same reason Audit#bytes_under uses it: a byte total
+  # that quietly omits dotfiles is worse than no total at all.
+  def test_sidecar_bytes_include_dotfiles
+    with_home do |home, env|
+      path = write_session(home, "-Users-you-app", expected_session_id, "/Users/you/app")
+      write("x" * 25, File.dirname(path), expected_session_id, ".DS_Store")
+
+      session = AgentSessions.sessions(:claude, env: env).first
+      assert_equal File.size(path) + 25, session.bytes
+    end
+  end
+
+  # A session without a sidecar is the whole store's shape on a fresh install,
+  # and the common case forever on machines that never spawn subagents.
+  def test_bytes_are_the_transcript_alone_without_a_sidecar
+    with_home do |home, env|
+      path = write_session(home, "-Users-you-app", expected_session_id, "/Users/you/app")
+
+      session = AgentSessions.sessions(:claude, env: env).first
+      assert_equal File.size(path), session.bytes
+    end
+  end
+
+  # The sidecar lookup must not become a second way for enumeration to die.
+  # A directory that cannot be read is missing bytes, not a missing session.
+  def test_unreadable_sidecar_does_not_take_the_session_down
+    with_home do |home, env|
+      path = write_session(home, "-Users-you-app", expected_session_id, "/Users/you/app")
+      sidecar = File.join(File.dirname(path), expected_session_id)
+      write("a" * 100, sidecar, "subagents", "agent-0198fa3c1122.jsonl")
+      File.chmod(0o000, sidecar)
+
+      begin
+        session = AgentSessions.sessions(:claude, env: env).first
+        refute_nil session
+        assert_operator session.bytes, :>=, File.size(path)
+      ensure
+        File.chmod(0o755, sidecar)
+      end
+    end
+  end
+
   private
 
   # Builds a realistically-shaped session file: kebab-case preamble records, a

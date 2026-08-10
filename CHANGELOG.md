@@ -15,3 +15,6 @@ folded into this entry rather than shipping a changelog with two consecutive
 - `verify`'s skip gate now keys on store existence, not base-dir existence
 - `doctor` takes its agent positionally, matching `where`
 - `list`/`du` now exit non-zero when any agent's store had to be skipped, instead of exiting 0 with only a stderr notice
+- Codex declares `archived_sessions/` (flat, optional) and enumerates it: an archived rollout file is a session, and `sessions`, `list`, `du`, and `audit` all report it now
+- Claude's `Session#bytes` counts the sidecar directory each transcript gets — `<id>/subagents/`, `<id>/tool-results/` — so `du` and `audit` no longer disagree by 29% about the same store
+- `Adapters::Base#bytes_for(path, stat)` is a new overridable hook, defaulting to the transcript's own size

@@ -68,6 +68,8 @@ AgentSessions.projects(:codex)                # distinct recorded project paths 
 
 Enumerating opencode needs the optional `sqlite3` gem; every other agent enumerates with the standard library alone.
 
+`Session#bytes` is what that session occupies on disk, not just its transcript. Claude Code writes a sidecar directory beside each transcript — `<id>/subagents/`, `<id>/tool-results/` — and those bytes belong to the session that produced them, which is why `du` and `audit` agree on the same store.
+
 ## Roadmap
 
 - **0.2 (this release):** enumerate sessions, map them to projects (`list`, `du`)

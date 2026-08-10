@@ -16,7 +16,12 @@ jobs:
     name: Ruby ${{ matrix.ruby }}
     strategy:
       matrix:
+        # The floor the gemspec promises and the current release. Testing only
+        # the latest let a Ruby 3.4-only syntax into the suite while
+        # required_ruby_version said 3.2.0 — the claim was true of the library
+        # and unverifiable, which is the same failure this gem exists to catch.
         ruby:
+          - '3.2'
           - '3.4.7'
 
     steps:

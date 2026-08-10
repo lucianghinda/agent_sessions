@@ -285,7 +285,9 @@ class ClaudeAdapterTest < Minitest::Test
       { type: "file-history-snapshot", sessionId: session_id, snapshot: {} },
       { type: "attachment", cwd: cwd, sessionId: session_id, timestamp: "2026-07-14T09:12:03.000Z" }
     ]
-    content = "#{lines.map { JSON.generate(it) }.join("\n")}\n"
+    # A named block parameter, not `it`: the gemspec supports Ruby 3.2, where
+    # `it` is not the implicit parameter but an undefined local variable.
+    content = "#{lines.map { |line| JSON.generate(line) }.join("\n")}\n"
     write(content, home, ".claude", "projects", dir_name, "#{session_id}.jsonl")
   end
 end

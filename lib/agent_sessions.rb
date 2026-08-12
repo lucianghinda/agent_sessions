@@ -12,6 +12,8 @@ require_relative "agent_sessions/store"
 require_relative "agent_sessions/check"
 require_relative "agent_sessions/session"
 require_relative "agent_sessions/home_expansion"
+# Before base: Base's class body includes Enumeration.
+require_relative "agent_sessions/adapters/enumeration"
 require_relative "agent_sessions/adapters/base"
 require_relative "agent_sessions/adapters/claude"
 require_relative "agent_sessions/adapters/codex"

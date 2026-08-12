@@ -26,6 +26,7 @@ require_relative "agent_sessions/adapters/cursor"
 require_relative "agent_sessions/adapters/cursor_ide"
 require_relative "agent_sessions/readers/base"
 require_relative "agent_sessions/readers/codex"
+require_relative "agent_sessions/readers/claude"
 require_relative "agent_sessions/audit"
 
 module AgentSessions
@@ -150,14 +151,14 @@ module AgentSessions
     # include_events: true adds the agent's UI-level records to the stream where
     # an adapter has them. They are excluded by default because they are
     # bookkeeping, not conversation, and they outnumber real messages.
-    def read(session, include_events: false)
+    def read(session, **options)
       klass = adapter_for(session.agent).reader_class
       unless klass
         raise UnsupportedFormat,
               "no reader for #{session.agent} yet; Session#fidelity says #{session.fidelity}"
       end
 
-      klass.new(session, include_events: include_events)
+      klass.new(session, **options)
     end
 
     def verify(agent = nil, env: ENV)

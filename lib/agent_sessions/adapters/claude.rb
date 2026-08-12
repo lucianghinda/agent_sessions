@@ -14,6 +14,8 @@ module AgentSessions
       store :projects, dir: "projects", glob: "*/*.jsonl", format: :jsonl
       store :history, path: "history.jsonl", format: :jsonl, optional: true
 
+      def self.reader_class = Readers::Claude
+
       DEFAULT_CLEANUP_PERIOD_DAYS = 30
 
       def retention

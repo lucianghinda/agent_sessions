@@ -7,7 +7,11 @@
 - `event_msg` records (38% of the corpus) are excluded unless `include_events: true`
 - Readers stream at an 8 MB per-record cap, not Layer 2's 1 MB: 14 real records exceed 1 MB and the largest is 2.41 MB, so the smaller cap would have dropped real messages. A record past the cap is reported, never silently skipped
 - `AgentSessions.read` raises `UnsupportedFormat` for an agent with no reader, so "cannot read this format" never looks like "this session is empty"
-- Agents other than Codex have no reader yet; `Session#fidelity` already says what each one will support
+- Claude reader: 18,111 messages from 142 real transcripts, zero exceptions, 5.6 ms per session
+- Claude's spilled tool output is resolved from the sidecar file, so a `:tool_result` carries content instead of a pointer — bounded to the session's own sidecar tree, because the path is read out of tool output and must never become a file-read primitive. `resolve_spills: false` turns it off
+- `reader.subagents` returns readers for the transcripts a session spawned, never merged into its own messages — 124 of them on the machine this was written against
+- Claude's nine session-state record types and its `system`/`attachment` context records are separated from turns; the latter two arrive with `include_events: true`
+- Agents other than Codex and Claude have no reader yet; `Session#fidelity` already says what each one will support
 
 ## 0.2.0 (2026-08-10)
 

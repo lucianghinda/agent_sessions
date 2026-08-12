@@ -23,6 +23,8 @@ module AgentSessions
       warning "the [history] config section governs history.jsonl only; " \
               "persistence = \"none\" does not stop rollout files"
 
+      def self.reader_class = Readers::Codex
+
       # rollout-<YYYY-MM-DDTHH-MM-SS>-<uuid>.jsonl (verified 2026-08-05 against
       # 360 real session files on this machine — every one matched). The
       # timestamp uses the local clock and dashes where ISO 8601 has colons.

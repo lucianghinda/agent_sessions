@@ -3,6 +3,7 @@
 require "json"
 require "date"
 require "uri"
+require "time"
 
 require_relative "agent_sessions/version"
 require_relative "agent_sessions/errors"
@@ -11,6 +12,7 @@ require_relative "agent_sessions/location"
 require_relative "agent_sessions/store"
 require_relative "agent_sessions/check"
 require_relative "agent_sessions/session"
+require_relative "agent_sessions/message"
 require_relative "agent_sessions/home_expansion"
 # Before base: Base's class body includes Enumeration.
 require_relative "agent_sessions/adapters/enumeration"
@@ -22,6 +24,8 @@ require_relative "agent_sessions/adapters/amp"
 require_relative "agent_sessions/adapters/opencode"
 require_relative "agent_sessions/adapters/cursor"
 require_relative "agent_sessions/adapters/cursor_ide"
+require_relative "agent_sessions/readers/base"
+require_relative "agent_sessions/readers/codex"
 require_relative "agent_sessions/audit"
 
 module AgentSessions
@@ -135,6 +139,25 @@ module AgentSessions
     # Raises MissingDependency or UnreadableStore for opencode, as sessions does.
     def unresolved_project_count(agent, env: ENV)
       adapter_for(agent).new(env: env).sessions.count { |session| session.project_path.nil? }
+    end
+
+    # Layer 3. Takes a Session (from `sessions`, `for_project`), not an agent
+    # name, because reading is per-session — the adapter comes from the session
+    # itself. Raises UnsupportedFormat for an agent with no reader yet, rather
+    # than returning a reader that yields nothing: "this gem cannot read that
+    # format" and "that session has no messages" must never look alike.
+    #
+    # include_events: true adds the agent's UI-level records to the stream where
+    # an adapter has them. They are excluded by default because they are
+    # bookkeeping, not conversation, and they outnumber real messages.
+    def read(session, include_events: false)
+      klass = adapter_for(session.agent).reader_class
+      unless klass
+        raise UnsupportedFormat,
+              "no reader for #{session.agent} yet; Session#fidelity says #{session.fidelity}"
+      end
+
+      klass.new(session, include_events: include_events)
     end
 
     def verify(agent = nil, env: ENV)

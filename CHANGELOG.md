@@ -1,3 +1,14 @@
+## Unreleased
+
+- Layer 3 begins: `AgentSessions.read(session)` returns a streaming reader — `each_message`, `messages`, `compactions`, `warnings`, `fidelity`, `partial?`
+- `Message` (`role`, `at`, `parts`, `text`, `raw`) and `Part` (`:text`, `:thinking`, `:tool_use`, `:tool_result`, `:image`, `:unknown`); `raw` is never dropped
+- Codex reader, the first: reads 73,946 messages from 415 real sessions with zero warnings and zero exceptions, at 4.5 ms per session
+- `compacted` records become boundaries rather than messages — replaying their `replacement_history` would report the same turns twice
+- `event_msg` records (38% of the corpus) are excluded unless `include_events: true`
+- Readers stream at an 8 MB per-record cap, not Layer 2's 1 MB: 14 real records exceed 1 MB and the largest is 2.41 MB, so the smaller cap would have dropped real messages. A record past the cap is reported, never silently skipped
+- `AgentSessions.read` raises `UnsupportedFormat` for an agent with no reader, so "cannot read this format" never looks like "this session is empty"
+- Agents other than Codex have no reader yet; `Session#fidelity` already says what each one will support
+
 ## 0.2.0 (2026-08-10)
 
 First public release. 0.1.0 was never tagged or published, so its work is

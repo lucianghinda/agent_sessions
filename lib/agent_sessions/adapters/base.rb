@@ -35,6 +35,11 @@ module AgentSessions
           @store_configs || raise(Error, "#{inspect} declares no store")
         end
 
+        # The Layer 3 reader for this agent, or nil while it has none. nil is
+        # what makes AgentSessions.read raise UnsupportedFormat instead of
+        # handing back a reader that quietly yields nothing.
+        def reader_class = nil
+
         private
 
         def agent(name) = @agent_name = name

@@ -35,3 +35,4 @@ module FixtureHelpers
 end
 
 require_relative "support/adapter_conformance"
+require_relative "support/reader_conformance"

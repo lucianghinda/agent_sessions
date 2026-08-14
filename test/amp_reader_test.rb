@@ -9,6 +9,7 @@ require_relative "test_helper"
 # observed thread still beats pi's zero.
 class AmpReaderTest < Minitest::Test
   include FixtureHelpers
+  include ReaderConformance
 
   def test_reads_the_messages_of_a_thread_document
     with_thread([turn("user", [text_part("hello")]), turn("assistant", [text_part("hi")])]) do |reader|
@@ -130,6 +131,20 @@ class AmpReaderTest < Minitest::Test
   end
 
   private
+
+  # --- reader conformance fixtures ---
+
+  def conformance_hello(**_options, &block)
+    with_thread([turn("user", [text_part("hello")])], &block)
+  end
+
+  def conformance_unknown(&block)
+    with_thread([turn("assistant", [{ type: "telepathy", data: 1 }])], &block)
+  end
+
+  def conformance_broken(&block)
+    with_raw_thread("{ not json", &block)
+  end
 
   def text_part(text) = { type: "text", text: text }
 

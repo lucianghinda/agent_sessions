@@ -10,6 +10,7 @@ require_relative "test_helper"
 # thinking 3,126, text 2,693, image 6 — a 1:1 match with this gem's vocabulary.
 class ClaudeReaderTest < Minitest::Test
   include FixtureHelpers
+  include ReaderConformance
 
   def test_reads_user_and_assistant_turns
     with_session([user_turn("hello"), assistant_turn("hi there")]) do |reader|
@@ -213,9 +214,26 @@ class ClaudeReaderTest < Minitest::Test
 
   private
 
-  STAMP = "2026-08-04T13:55:06.852Z"
-  SESSION = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-  PROJECT = "-Users-you-app"
+  # --- reader conformance fixtures ---
+
+  def conformance_hello(**options, &block)
+    with_session([user_turn("hello")], **options, &block)
+  end
+
+  def conformance_unknown(&block)
+    with_session([{ type: "telepathy", sessionId: SESSION, timestamp: STAMP }], &block)
+  end
+
+  def conformance_broken
+    with_home do |home, env|
+      write("not json at all\n", home, ".claude", "projects", PROJECT, "#{SESSION}.jsonl")
+      yield read_session(env)
+    end
+  end
+
+    STAMP = "2026-08-04T13:55:06.852Z"
+    SESSION = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    PROJECT = "-Users-you-app"
 
   def turn(role, content)
     { type: role, timestamp: STAMP, sessionId: SESSION, uuid: "u1", cwd: "/Users/you/app",

@@ -10,10 +10,18 @@ module AgentSessions
   # neither — its URL or payload stays in raw, because normalizing an image
   # would mean deciding whether to load it, and reading is stat-cheap by design.
   Part = Data.define(:type, :text, :name, :call_id) do
-    TYPES = %i[text thinking tool_use tool_result image unknown].freeze
+    # self::, not a bare TYPES =. Constant assignment inside a block is
+    # lexically scoped, so the bare form defines AgentSessions::TYPES — a
+    # generically named constant in the top namespace, and no Part::TYPES at
+    # all for a caller (or a conformance test) to check a part against.
+    self::TYPES = %i[text thinking tool_use tool_result image unknown].freeze
 
+    # self.class::TYPES for the same reason: inside a block passed to
+    # Data.define, a bare constant resolves against the ENCLOSING lexical
+    # scope (AgentSessions), never against the class being defined.
     def initialize(type:, text: nil, name: nil, call_id: nil)
-      raise ArgumentError, "part type #{type.inspect} must be one of #{TYPES.join(", ")}" unless TYPES.include?(type)
+      types = self.class::TYPES
+      raise ArgumentError, "part type #{type.inspect} must be one of #{types.join(", ")}" unless types.include?(type)
 
       super
     end
@@ -27,10 +35,12 @@ module AgentSessions
   # raw is never dropped (Layer 3 rule 1): when this normalization is wrong or
   # incomplete, a caller escapes the abstraction instead of forking the gem.
   Message = Data.define(:role, :at, :parts, :raw) do
-    ROLES = %i[user assistant system tool unknown].freeze
+    # self::, for the reason Part::TYPES gives above.
+    self::ROLES = %i[user assistant system tool unknown].freeze
 
     def initialize(role:, at:, parts:, raw:)
-      raise ArgumentError, "role #{role.inspect} must be one of #{ROLES.join(", ")}" unless ROLES.include?(role)
+      roles = self.class::ROLES
+      raise ArgumentError, "role #{role.inspect} must be one of #{roles.join(", ")}" unless roles.include?(role)
 
       super
     end

@@ -8,6 +8,7 @@ require_relative "test_helper"
 # contains them (response_item 57%, event_msg 38%, compacted 18 occurrences).
 class CodexReaderTest < Minitest::Test
   include FixtureHelpers
+  include ReaderConformance
 
   def test_reads_user_and_assistant_messages_in_order
     with_session([user_message("hello"), assistant_message("hi there")]) do |reader|
@@ -266,11 +267,25 @@ class CodexReaderTest < Minitest::Test
 
   private
 
-  STAMP = "2026-07-21T09:12:03.000Z"
-  UUID = "00000000-0000-4000-8000-000000000001"
+  # --- reader conformance fixtures ---
 
-  # Not `message`: Minitest::Assertions defines its own `message`, and
-  # overriding it breaks every assertion failure this file could report.
+  def conformance_hello(**options, &block)
+    with_session([user_message("hello")], **options, &block)
+  end
+
+  def conformance_unknown(&block)
+    with_session([{ type: "response_item", timestamp: STAMP, payload: { type: "telepathy_item" } }], &block)
+  end
+
+  def conformance_broken(&block)
+    with_raw_file("not json at all\n", &block)
+  end
+
+    STAMP = "2026-07-21T09:12:03.000Z"
+    UUID = "00000000-0000-4000-8000-000000000001"
+
+    # Not `message`: Minitest::Assertions defines its own `message`, and
+    # overriding it breaks every assertion failure this file could report.
   def message_record(role, content_type, text)
     { type: "response_item", timestamp: STAMP,
       payload: { type: "message", role: role, content: [{ type: content_type, text: text }] } }

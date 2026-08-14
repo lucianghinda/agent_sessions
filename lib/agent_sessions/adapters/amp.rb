@@ -21,6 +21,8 @@ module AgentSessions
       # sync folder, which is the check that actually matters for it.
       store :secrets, path: "secrets.json", format: :json, optional: true
 
+      def self.reader_class = Readers::Amp
+
       warning "the server holds the canonical copy; local threads may be a partial mirror"
 
       # Gated, unlike the warning above. That one is a permanent property of the

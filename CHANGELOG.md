@@ -11,7 +11,8 @@
 - Claude's spilled tool output is resolved from the sidecar file, so a `:tool_result` carries content instead of a pointer — bounded to the session's own sidecar tree, because the path is read out of tool output and must never become a file-read primitive. `resolve_spills: false` turns it off
 - `reader.subagents` returns readers for the transcripts a session spawned, never merged into its own messages — 124 of them on the machine this was written against
 - Claude's nine session-state record types and its `system`/`attachment` context records are separated from turns; the latter two arrive with `include_events: true`
-- Agents other than Codex and Claude have no reader yet; `Session#fidelity` already says what each one will support
+- Amp reader: `partial?` is true there, since the server holds the canonical copy. A thread is one JSON document rather than JSONL, so it is read whole under a 32 MB cap — the bound the gem's one unbounded read never had
+- Agents other than Codex, Claude and Amp have no reader yet; `Session#fidelity` already says what each one will support
 
 ## 0.2.0 (2026-08-10)
 

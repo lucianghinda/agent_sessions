@@ -27,6 +27,7 @@ require_relative "agent_sessions/adapters/cursor_ide"
 require_relative "agent_sessions/readers/base"
 require_relative "agent_sessions/readers/codex"
 require_relative "agent_sessions/readers/claude"
+require_relative "agent_sessions/readers/amp"
 require_relative "agent_sessions/audit"
 
 module AgentSessions

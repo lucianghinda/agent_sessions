@@ -98,4 +98,27 @@ module ReaderConformance
   def test_conformance_compactions_are_a_list
     conformance_hello { |reader| assert_kind_of Array, reader.compactions }
   end
+
+  # tree and branching? must agree. A reader that answers false and then hands
+  # back a tree, or answers true and raises, is worse than either alone: a
+  # caller has no way left to ask what a store actually records.
+  def test_conformance_tree_matches_the_branching_declaration
+    conformance_hello do |reader|
+      assert_includes [true, false], reader.branching?
+
+      unless reader.branching?
+        assert_raises(AgentSessions::UnsupportedFormat) { reader.tree }
+        next
+      end
+
+      roots = reader.tree
+      assert_kind_of Array, roots
+      roots.each { |node| assert_kind_of AgentSessions::Node, node }
+      assert_equal reader.messages.size, count_tree_messages(roots)
+    end
+  end
+
+  def count_tree_messages(nodes)
+    nodes.sum { |node| 1 + count_tree_messages(node.children) }
+  end
 end

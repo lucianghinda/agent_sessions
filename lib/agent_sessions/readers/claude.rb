@@ -37,6 +37,13 @@ module AgentSessions
       # the cap exists because the pointer says nothing about the size.
       MAX_SPILL_BYTES = 4_000_000
 
+      # Every uuid-bearing record names the record it followed, and 380 branch
+      # points sit across 85 of 151 real transcripts — a turn edited and re-run
+      # leaves two children under one parent. Exactly one root per file and no
+      # orphaned parent link was found in that corpus, so the links are
+      # trustworthy enough to build a tree from.
+      def branching? = true
+
       def initialize(session, resolve_spills: true, **rest)
         super(session, **rest)
         @resolve_spills = resolve_spills
@@ -68,6 +75,9 @@ module AgentSessions
       private
 
       attr_reader :resolve_spills
+
+      def node_id_for(record) = record["uuid"]
+      def parent_id_for(record) = record["parentUuid"]
 
       def message_for(record, line_number)
         type = record["type"]

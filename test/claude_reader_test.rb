@@ -192,6 +192,74 @@ class ClaudeReaderTest < Minitest::Test
     with_session([user_turn("hi")]) { |reader| assert_empty reader.subagents }
   end
 
+  # 380 branch points across 85 of 151 real transcripts, fan-out 2: a turn was
+  # edited and re-run, so one parent has two alternative continuations. Read in
+  # file order those are two histories interleaved with nothing marking where
+  # one ends.
+  def test_a_branch_becomes_two_children_of_one_parent
+    records = [linked("user", "u1", nil, "start"),
+               linked("assistant", "u2", "u1", "first answer"),
+               linked("assistant", "u3", "u1", "second answer after an edit")]
+
+    with_session(records) do |reader|
+      roots = reader.tree
+      assert_equal 1, roots.size
+      assert_equal "start", roots.first.message.text
+      assert_equal ["first answer", "second answer after an edit"],
+                   roots.first.children.map { |child| child.message.text }
+    end
+  end
+
+  def test_a_linear_conversation_is_a_chain_of_single_children
+    records = [linked("user", "u1", nil, "one"),
+               linked("assistant", "u2", "u1", "two"),
+               linked("user", "u3", "u2", "three")]
+
+    with_session(records) do |reader|
+      root = reader.tree.first
+      assert_equal "one", root.message.text
+      assert_equal "two", root.children.first.message.text
+      assert_equal "three", root.children.first.children.first.message.text
+    end
+  end
+
+  # 5,006 of the 25,633 uuid-bearing records are attachments and system
+  # records, which sit in the parent chain without being turns. A message whose
+  # recorded parent is one of those must attach to the nearest ancestor that IS
+  # a message, or the tree loses turns that `messages` reports.
+  def test_non_message_records_in_the_chain_are_transparent
+    records = [linked("user", "u1", nil, "question"),
+               { type: "attachment", uuid: "u2", parentUuid: "u1", timestamp: STAMP,
+                 attachment: { type: "hook_success" } },
+               linked("assistant", "u3", "u2", "answer")]
+
+    with_session(records) do |reader|
+      root = reader.tree.first
+      assert_equal "question", root.message.text
+      assert_equal ["answer"], root.children.map { |child| child.message.text }
+    end
+  end
+
+  def test_the_tree_holds_exactly_the_messages_the_reader_reports
+    records = [linked("user", "u1", nil, "a"),
+               linked("assistant", "u2", "u1", "b"),
+               linked("assistant", "u3", "u1", "c")]
+
+    with_session(records) do |reader|
+      flattened = []
+      walk = lambda do |node|
+        flattened << node.message.text
+        node.children.each { |child| walk.call(child) }
+      end
+      reader.tree.each { |root| walk.call(root) }
+      assert_equal reader.messages.map(&:text).sort, flattened.sort
+    end
+  end
+
+  def test_claude_declares_itself_branching
+    with_session([user_turn("hi")]) { |reader| assert_predicate reader, :branching? }
+  end
+
   def test_an_unrecognized_record_type_warns_and_becomes_unknown
     with_session([{ type: "telepathy", sessionId: SESSION, timestamp: STAMP }]) do |reader|
       assert_equal [:unknown], reader.messages.first.parts.map(&:type)
@@ -238,6 +306,11 @@ class ClaudeReaderTest < Minitest::Test
   def turn(role, content)
     { type: role, timestamp: STAMP, sessionId: SESSION, uuid: "u1", cwd: "/Users/you/app",
       isSidechain: false, message: { role: role, content: content } }
+  end
+
+  # A turn with explicit tree links, as every real record carries them.
+  def linked(role, uuid, parent_uuid, text)
+    turn(role, [{ type: "text", text: text }]).merge("uuid" => uuid, "parentUuid" => parent_uuid)
   end
 
   def user_turn(text) = turn("user", [{ type: "text", text: text }])

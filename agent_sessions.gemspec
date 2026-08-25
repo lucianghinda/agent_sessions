@@ -8,10 +8,10 @@ Gem::Specification.new do |spec|
   spec.authors = ["Lucian Ghinda"]
   spec.email = ["dev@ghinda.com"]
 
-  spec.summary = "Locate and enumerate AI coding agent session logs"
-  spec.description = "Resolves where AI coding agents (Claude Code, Codex CLI, Cursor, Amp, opencode, pi) " \
-                     "store their session logs, enumerates sessions and maps them to projects, verifies " \
-                     "those paths against disk, and audits sync and backup exposure. Read-only by design."
+  spec.summary = "Locate, verify, and read AI coding agent session logs"
+  spec.description = "Supports 11 adapters for Claude Code, Codex CLI, Cursor CLI/IDE, Amp, opencode, pi, " \
+                     "Gemini CLI, GitHub Copilot CLI, Qwen Code, and Grok Build; reads messages for nine " \
+                     "agents, verifies store paths, maps sessions to projects, and audits sync exposure."
   spec.homepage = "https://github.com/lucianghinda/agent_sessions"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"

@@ -7,7 +7,7 @@ class VerifyTest < Minitest::Test
 
   def test_skip_when_agent_not_installed
     with_home do |_home, env|
-      checks = AgentSessions.verify(:claude, env: env)
+      checks = Agent::Sessions.verify(:claude, env: env)
       assert_equal [:skip], checks.map(&:status).uniq
       assert_includes checks.first.detail, "does not exist"
     end
@@ -22,7 +22,7 @@ class VerifyTest < Minitest::Test
     with_home do |home, env|
       touch(home, ".cursor", "argv.json")
       touch(home, ".cursor", "extensions", "some-ext", "package.json")
-      checks = AgentSessions.verify(:cursor, env: env)
+      checks = Agent::Sessions.verify(:cursor, env: env)
       assert_equal [:skip], checks.map(&:status).uniq
       assert_includes checks.first.detail, "holds none of the declared stores"
     end
@@ -31,8 +31,8 @@ class VerifyTest < Minitest::Test
   def test_verify_agrees_with_installed
     with_home do |home, env|
       touch(home, ".cursor", "argv.json")
-      store = AgentSessions.locate(:cursor, env: env)
-      checks = AgentSessions.verify(:cursor, env: env)
+      store = Agent::Sessions.locate(:cursor, env: env)
+      checks = Agent::Sessions.verify(:cursor, env: env)
       refute store.installed?
       assert_equal [:skip], checks.map(&:status).uniq
     end
@@ -45,7 +45,7 @@ class VerifyTest < Minitest::Test
     with_home do |home, env|
       elsewhere = File.join(home, "elsewhere")
       touch(elsewhere, "s.jsonl")
-      checks = AgentSessions.verify(:pi, env: env.merge("PI_CODING_AGENT_SESSION_DIR" => elsewhere))
+      checks = Agent::Sessions.verify(:pi, env: env.merge("PI_CODING_AGENT_SESSION_DIR" => elsewhere))
       assert_equal :pass, checks.find { |c| c.claim.include?("sessions") }.status
     end
   end
@@ -54,7 +54,7 @@ class VerifyTest < Minitest::Test
     with_home do |home, env|
       touch(home, ".claude", "projects", "-p", "s.jsonl")
       touch(home, ".claude", "history.jsonl")
-      checks = AgentSessions.verify(:claude, env: env)
+      checks = Agent::Sessions.verify(:claude, env: env)
       assert checks.all?(&:pass?), checks.map(&:detail).inspect
     end
   end
@@ -62,7 +62,7 @@ class VerifyTest < Minitest::Test
   def test_glob_stores_report_match_counts
     with_home do |home, env|
       touch(home, ".claude", "projects", "-p", "s.jsonl")
-      checks = AgentSessions.verify(:claude, env: env)
+      checks = Agent::Sessions.verify(:claude, env: env)
       projects = checks.find { |c| c.claim.include?("projects") }
       assert_includes projects.detail, "1 file"
     end
@@ -74,7 +74,7 @@ class VerifyTest < Minitest::Test
   def test_fail_when_required_store_missing_but_another_store_exists
     with_home do |home, env|
       touch(home, ".codex", "history.jsonl")
-      checks = AgentSessions.verify(:codex, env: env)
+      checks = Agent::Sessions.verify(:codex, env: env)
       assert_equal :fail, checks.find { |c| c.claim.include?("sessions") }.status
     end
   end
@@ -82,7 +82,7 @@ class VerifyTest < Minitest::Test
   def test_drift_when_optional_store_missing
     with_home do |home, env|
       touch(home, ".codex", "sessions", "2026", "07", "21", "rollout-a.jsonl")
-      checks = AgentSessions.verify(:codex, env: env)
+      checks = Agent::Sessions.verify(:codex, env: env)
       assert_equal :drift, checks.find { |c| c.claim.include?("history") }.status
     end
   end
@@ -92,7 +92,7 @@ class VerifyTest < Minitest::Test
   def test_amp_threads_is_a_failure_when_missing
     with_home do |home, env|
       touch(home, ".local", "share", "amp", "secrets.json")
-      checks = AgentSessions.verify(:amp, env: env)
+      checks = Agent::Sessions.verify(:amp, env: env)
       assert_equal :fail, checks.find { |c| c.claim.include?("threads") }.status
     end
   end
@@ -104,27 +104,27 @@ class VerifyTest < Minitest::Test
   def test_amp_secrets_is_drift_not_a_failure
     with_home do |home, env|
       touch(home, ".local", "share", "amp", "threads", "T-1.json")
-      checks = AgentSessions.verify(:amp, env: env)
+      checks = Agent::Sessions.verify(:amp, env: env)
       assert_equal :drift, checks.find { |c| c.claim.include?("secrets") }.status
     end
   end
 
   def test_verify_without_agent_covers_every_adapter
     with_home do |_home, env|
-      agents = AgentSessions.verify(env: env).map(&:agent).uniq
-      assert_equal AgentSessions.agents.sort, agents.sort
+      agents = Agent::Sessions.verify(env: env).map(&:agent).uniq
+      assert_equal Agent::Sessions.agents.sort, agents.sort
     end
   end
 
   def test_doctor_flags_stale_verification
-    checks = AgentSessions.doctor(:claude, env: { "HOME" => "/nonexistent" }, today: Date.new(2026, 12, 1))
+    checks = Agent::Sessions.doctor(:claude, env: { "HOME" => "/nonexistent" }, today: Date.new(2026, 12, 1))
     staleness = checks.find { |c| c.claim.include?("verified") }
     assert_equal :drift, staleness.status
     assert_includes staleness.detail, "2026-08-05"
   end
 
   def test_doctor_passes_fresh_verification
-    checks = AgentSessions.doctor(:claude, env: { "HOME" => "/nonexistent" }, today: Date.new(2026, 8, 1))
+    checks = Agent::Sessions.doctor(:claude, env: { "HOME" => "/nonexistent" }, today: Date.new(2026, 8, 1))
     assert_equal :pass, checks.find { |c| c.claim.include?("verified") }.status
   end
 end

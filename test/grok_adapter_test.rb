@@ -12,7 +12,7 @@ require_relative "test_helper"
 class GrokAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Grok
+  def adapter_class = Agent::Sessions::Adapters::Grok
 
   def build_fixture(home)
     write(JSON.generate(summary), *session_dir(home), "summary.json")
@@ -28,7 +28,7 @@ class GrokAdapterTest < Minitest::Test
   def test_the_id_is_the_directory_not_the_filename
     with_home do |home, env|
       build_fixture(home)
-      session = AgentSessions.sessions(:grok, env: env).first
+      session = Agent::Sessions.sessions(:grok, env: env).first
       assert_equal SESSION, session.id, "summary.json is the file; the directory is the session"
     end
   end
@@ -54,21 +54,21 @@ class GrokAdapterTest < Minitest::Test
     with_home do |home, env|
       recorded = { info: { cwd: "/Users/you/moved" }, created_at: CREATED, updated_at: UPDATED }
       write(JSON.generate(recorded), *session_dir(home), "summary.json")
-      assert_equal "/Users/you/moved", AgentSessions.sessions(:grok, env: env).first.project_path
+      assert_equal "/Users/you/moved", Agent::Sessions.sessions(:grok, env: env).first.project_path
     end
   end
 
   def test_a_summary_without_a_cwd_falls_back_to_the_decoded_directory
     with_home do |home, env|
       write(JSON.generate({ created_at: CREATED }), *session_dir(home), "summary.json")
-      assert_equal PROJECT, AgentSessions.sessions(:grok, env: env).first.project_path
+      assert_equal PROJECT, Agent::Sessions.sessions(:grok, env: env).first.project_path
     end
   end
 
   def test_timestamps_come_from_the_summary
     with_home do |home, env|
       build_fixture(home)
-      session = AgentSessions.sessions(:grok, env: env).first
+      session = Agent::Sessions.sessions(:grok, env: env).first
       assert_equal Time.utc(2026, 7, 21, 9, 12, 3), session.started_at
       assert_equal Time.utc(2026, 7, 21, 10, 30), session.updated_at
     end
@@ -81,22 +81,22 @@ class GrokAdapterTest < Minitest::Test
       build_fixture(home)
       write("x" * 500, *session_dir(home), "chat_history.jsonl")
       write("y" * 300, *session_dir(home), "events.jsonl")
-      session = AgentSessions.sessions(:grok, env: env).first
+      session = Agent::Sessions.sessions(:grok, env: env).first
       assert_operator session.bytes, :>=, 800, "the transcript and event log are this session's bytes"
     end
   end
 
   def test_provisional_shape_is_declared_once_the_store_exists
     with_home do |home, env|
-      refute(AgentSessions.locate(:grok, env: env).warnings.any? { |w| w.include?("unverified") })
+      refute(Agent::Sessions.locate(:grok, env: env).warnings.any? { |w| w.include?("unverified") })
       build_fixture(home)
-      assert(AgentSessions.locate(:grok, env: env).warnings.any? { |w| w.include?("unverified") })
+      assert(Agent::Sessions.locate(:grok, env: env).warnings.any? { |w| w.include?("unverified") })
     end
   end
 
   def test_the_separate_usage_log_is_declared
     with_home do |_home, env|
-      assert(AgentSessions.locate(:grok, env: env).warnings.any? { |w| w.include?("unified.jsonl") })
+      assert(Agent::Sessions.locate(:grok, env: env).warnings.any? { |w| w.include?("unified.jsonl") })
     end
   end
 

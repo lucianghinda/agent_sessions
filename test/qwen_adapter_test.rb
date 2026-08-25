@@ -9,7 +9,7 @@ require_relative "test_helper"
 class QwenAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Qwen
+  def adapter_class = Agent::Sessions::Adapters::Qwen
 
   def build_fixture(home)
     records = [{ type: "user", timestamp: STAMP, cwd: "/Users/you/app",
@@ -27,9 +27,9 @@ class QwenAdapterTest < Minitest::Test
 
   def test_provisional_shape_is_declared_once_the_store_exists
     with_home do |home, env|
-      refute(AgentSessions.locate(:qwen, env: env).warnings.any? { |w| w.include?("unverified") })
+      refute(Agent::Sessions.locate(:qwen, env: env).warnings.any? { |w| w.include?("unverified") })
       build_fixture(home)
-      assert(AgentSessions.locate(:qwen, env: env).warnings.any? { |w| w.include?("unverified") })
+      assert(Agent::Sessions.locate(:qwen, env: env).warnings.any? { |w| w.include?("unverified") })
     end
   end
 
@@ -42,7 +42,7 @@ class QwenAdapterTest < Minitest::Test
                    message: { role: "assistant", content: "hey" } }]
       write(records.map { |r| JSON.generate(r) }.join("\n") + "\n",
             home, ".qwen", "projects", "my-app", "chats", "#{SESSION}.jsonl")
-      assert_equal "/Users/you/app", AgentSessions.sessions(:qwen, env: env).first.project_path
+      assert_equal "/Users/you/app", Agent::Sessions.sessions(:qwen, env: env).first.project_path
     end
   end
 

@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
+require "agent/sessions"
 require_relative "test_helper"
-require_relative "../lib/agent_sessions/cli"
 
 class NoNetworkTest < Minitest::Test
   include FixtureHelpers
@@ -15,20 +15,20 @@ class NoNetworkTest < Minitest::Test
       touch(home, ".claude", "projects", "-p", "s.jsonl")
       touch(home, ".codex", "sessions", "2026", "07", "21", "rollout-a.jsonl")
 
-      AgentSessions.all(env: env)
-      AgentSessions.installed(env: env)
-      AgentSessions.verify(env: env)
-      AgentSessions.doctor(env: env)
-      AgentSessions.audit(env: env)
+      Agent::Sessions.all(env: env)
+      Agent::Sessions.installed(env: env)
+      Agent::Sessions.verify(env: env)
+      Agent::Sessions.doctor(env: env)
+      Agent::Sessions.audit(env: env)
 
       %w[where doctor audit].each do |command|
         [[command], [command, "--json"]].each do |argv|
-          AgentSessions::CLI.new(argv, env: env, stdout: StringIO.new, stderr: StringIO.new).run
+          Agent::Sessions::CLI.new(argv, env: env, stdout: StringIO.new, stderr: StringIO.new).run
         end
       end
     end
 
-    refute net_http_loaded?, "AgentSessions must never load net/http"
+    refute net_http_loaded?, "Agent::Sessions must never load net/http"
   end
 
   private

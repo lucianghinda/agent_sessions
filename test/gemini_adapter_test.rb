@@ -8,7 +8,7 @@ require_relative "test_helper"
 class GeminiAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Gemini
+  def adapter_class = Agent::Sessions::Adapters::Gemini
 
   def build_fixture(home)
     write(JSON.generate(chat_document), home, ".gemini", "tmp", PROJECT_HASH, "chats", "#{SESSION}.json")
@@ -37,7 +37,7 @@ class GeminiAdapterTest < Minitest::Test
       %w[session-2025-12-12T12-42-d4abc9ce session-2025-12-12T12-45-d4abc9ce].each do |name|
         write(JSON.generate(chat_document), home, ".gemini", "tmp", PROJECT_HASH, "chats", "#{name}.json")
       end
-      ids = AgentSessions.sessions(:gemini, env: env).map(&:id).force
+      ids = Agent::Sessions.sessions(:gemini, env: env).map(&:id).force
       assert_equal 2, ids.uniq.size
     end
   end
@@ -47,7 +47,7 @@ class GeminiAdapterTest < Minitest::Test
   def test_started_at_reads_the_filename_as_utc
     with_home do |home, env|
       build_fixture(home)
-      session = AgentSessions.sessions(:gemini, env: env).first
+      session = Agent::Sessions.sessions(:gemini, env: env).first
       assert_equal Time.utc(2025, 11, 29, 20, 8), session.started_at
     end
   end
@@ -56,7 +56,7 @@ class GeminiAdapterTest < Minitest::Test
     with_home do |home, env|
       write(JSON.generate(chat_document), home, ".gemini", "tmp", PROJECT_HASH, "chats",
             malformed_date_filename)
-      session = AgentSessions.sessions(:gemini, env: env).first
+      session = Agent::Sessions.sessions(:gemini, env: env).first
       refute_nil session.updated_at
     end
   end
@@ -68,8 +68,8 @@ class GeminiAdapterTest < Minitest::Test
   def test_without_projects_json_a_session_has_no_project
     with_home do |home, env|
       build_fixture(home)
-      assert_nil AgentSessions.sessions(:gemini, env: env).first.project_path
-      assert_empty AgentSessions.projects(:gemini, env: env)
+      assert_nil Agent::Sessions.sessions(:gemini, env: env).first.project_path
+      assert_empty Agent::Sessions.projects(:gemini, env: env)
     end
   end
 
@@ -77,10 +77,10 @@ class GeminiAdapterTest < Minitest::Test
     with_home do |home, env|
       build_fixture(home)
       write(JSON.generate({ "/Users/you/app" => PROJECT_HASH }), home, ".gemini", "projects.json")
-      session = AgentSessions.sessions(:gemini, env: env).first
+      session = Agent::Sessions.sessions(:gemini, env: env).first
       assert_equal "/Users/you/app", session.project_path
-      assert_equal ["/Users/you/app"], AgentSessions.projects(:gemini, env: env)
-      found = AgentSessions.for_project("/Users/you/app", env: env, agents: [:gemini]).to_a
+      assert_equal ["/Users/you/app"], Agent::Sessions.projects(:gemini, env: env)
+      found = Agent::Sessions.for_project("/Users/you/app", env: env, agents: [:gemini]).to_a
       assert_equal [SESSION], found.map(&:id)
     end
   end
@@ -90,7 +90,7 @@ class GeminiAdapterTest < Minitest::Test
       build_fixture(home)
       write(JSON.generate({ "projects" => { "/Users/you/app" => PROJECT_HASH } }),
             home, ".gemini", "projects.json")
-      assert_equal "/Users/you/app", AgentSessions.sessions(:gemini, env: env).first.project_path
+      assert_equal "/Users/you/app", Agent::Sessions.sessions(:gemini, env: env).first.project_path
     end
   end
 
@@ -98,7 +98,7 @@ class GeminiAdapterTest < Minitest::Test
     with_home do |home, env|
       build_fixture(home)
       write("not json", home, ".gemini", "projects.json")
-      assert_nil AgentSessions.sessions(:gemini, env: env).first.project_path
+      assert_nil Agent::Sessions.sessions(:gemini, env: env).first.project_path
     end
   end
 
@@ -108,9 +108,9 @@ class GeminiAdapterTest < Minitest::Test
   def test_jsonl_chats_are_reported_as_unread_rather_than_ignored
     with_home do |home, env|
       build_fixture(home)
-      refute(AgentSessions.locate(:gemini, env: env).warnings.any? { |w| w.include?("JSONL") })
+      refute(Agent::Sessions.locate(:gemini, env: env).warnings.any? { |w| w.include?("JSONL") })
       write("{}\n", home, ".gemini", "tmp", PROJECT_HASH, "chats", "session-2026-01-01T00-00-aaaaaaaa.jsonl")
-      assert(AgentSessions.locate(:gemini, env: env).warnings.any? { |w| w.include?("JSONL") })
+      assert(Agent::Sessions.locate(:gemini, env: env).warnings.any? { |w| w.include?("JSONL") })
     end
   end
 

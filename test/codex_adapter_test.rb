@@ -5,7 +5,7 @@ require_relative "test_helper"
 class CodexAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Codex
+  def adapter_class = Agent::Sessions::Adapters::Codex
 
   # Real filename shape, verified 2026-08-05:
   # rollout-2026-03-28T18-00-42-019d352d-1d88-7ed3-b0cc-dfab5f37ecd9.jsonl
@@ -44,7 +44,7 @@ class CodexAdapterTest < Minitest::Test
   # so a store declared ahead of :sessions would silently redirect enumeration.
   def test_declares_archived_history_and_index_as_optional_layers
     with_home do |_home, env|
-      store = AgentSessions.locate(:codex, env: env)
+      store = Agent::Sessions.locate(:codex, env: env)
       assert_equal %i[sessions archived history index], store.layers.map(&:kind)
       assert_equal :sessions, store.effective.kind
     end
@@ -52,7 +52,7 @@ class CodexAdapterTest < Minitest::Test
 
   def test_carries_the_history_config_warning
     with_home do |_home, env|
-      store = AgentSessions.locate(:codex, env: env)
+      store = Agent::Sessions.locate(:codex, env: env)
       assert(store.warnings.any? { |w| w.include?("history.jsonl") })
     end
   end
@@ -60,7 +60,7 @@ class CodexAdapterTest < Minitest::Test
   def test_started_at_comes_from_the_filename_not_a_read
     with_home do |home, env|
       build_fixture(home)
-      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal Time.new(2026, 7, 21, 9, 12, 3), session.started_at
     end
   end
@@ -74,7 +74,7 @@ class CodexAdapterTest < Minitest::Test
     with_home do |home, env|
       write("{}", home, ".codex", "sessions", "2026", "07", "21",
             "rollout-2026-07-21T09-12-03-#{FIXTURE_UUID} (conflicted copy).jsonl")
-      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal "rollout-2026-07-21T09-12-03-#{FIXTURE_UUID} (conflicted copy)", session.id
     end
   end
@@ -102,7 +102,7 @@ class CodexAdapterTest < Minitest::Test
       write("{}", home, ".codex", "sessions", "2026", "07", "22", "rollout-2026-07-22T09-12-03-#{FIXTURE_UUID}.jsonl")
       write("{}", home, ".codex", "sessions", "2026", "07", "23", "rollout-2026-07-23T09-12-03-#{FIXTURE_UUID}.jsonl")
 
-      sessions = AgentSessions::Adapters::Codex.new(env: env).sessions.force
+      sessions = Agent::Sessions::Adapters::Codex.new(env: env).sessions.force
       assert_equal 3, sessions.size, "expected the listing to survive #{bad_filename.inspect}"
 
       # FILENAME still matches (its \d{2} groups accept the digits); only
@@ -115,7 +115,7 @@ class CodexAdapterTest < Minitest::Test
   end
 
   def test_fidelity_is_full
-    assert_equal :full, AgentSessions::Adapters::Codex.fidelity_value
+    assert_equal :full, Agent::Sessions::Adapters::Codex.fidelity_value
   end
 
   # Pins the cap rather than leaving it free to regress. Real data (360 files,
@@ -129,7 +129,7 @@ class CodexAdapterTest < Minitest::Test
       target = JSON.generate({ type: "session_meta", payload: { cwd: "/Users/you/app" } })
       write("#{(filler + [target]).join("\n")}\n", home, ".codex", "sessions", "2026", "07", "21",
             "rollout-2026-07-21T09-12-03-00000000-0000-4000-8000-000000000001.jsonl")
-      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end
@@ -143,7 +143,7 @@ class CodexAdapterTest < Minitest::Test
       target = JSON.generate({ type: "session_meta", payload: { cwd: "/Users/you/app" } })
       write("#{(filler + [target]).join("\n")}\n", home, ".codex", "sessions", "2026", "07", "21",
             "rollout-2026-07-21T09-12-03-00000000-0000-4000-8000-000000000002.jsonl")
-      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Codex.new(env: env).sessions.first
       assert_nil session.project_path
     end
   end
@@ -161,7 +161,7 @@ class CodexAdapterTest < Minitest::Test
                 "#{JSON.generate({ type: "session_meta", payload: { cwd: "/Users/you/app" } })}\n"
       write(content, home, ".codex", "sessions", "2026", "07", "21",
             "rollout-2026-07-21T09-12-03-00000000-0000-4000-8000-000000000003.jsonl")
-      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end
@@ -175,7 +175,7 @@ class CodexAdapterTest < Minitest::Test
                 "#{JSON.generate({ type: "session_meta", payload: { cwd: "/Users/you/app" } })}\n"
       write(content, home, ".codex", "sessions", "2026", "07", "21",
             "rollout-2026-07-21T09-12-03-00000000-0000-4000-8000-000000000004.jsonl")
-      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end
@@ -189,7 +189,7 @@ class CodexAdapterTest < Minitest::Test
       build_fixture(home)
       write_archived(home, "00000000-0000-4000-8000-00000000dead")
 
-      ids = AgentSessions::Adapters::Codex.new(env: env).sessions.force.map(&:id)
+      ids = Agent::Sessions::Adapters::Codex.new(env: env).sessions.force.map(&:id)
       assert_includes ids, "00000000-0000-4000-8000-00000000dead"
       assert_includes ids, FIXTURE_UUID
     end
@@ -202,7 +202,7 @@ class CodexAdapterTest < Minitest::Test
     with_home do |home, env|
       write_archived(home, "00000000-0000-4000-8000-00000000beef")
 
-      session = AgentSessions::Adapters::Codex.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Codex.new(env: env).sessions.first
       assert_equal "00000000-0000-4000-8000-00000000beef", session.id
       assert_equal Time.new(2026, 7, 21, 9, 12, 3), session.started_at
     end
@@ -216,7 +216,7 @@ class CodexAdapterTest < Minitest::Test
       build_fixture(home)
       write_archived(home, "00000000-0000-4000-8000-00000000cafe")
 
-      sessions = AgentSessions::Adapters::Codex.new(env: env).sessions
+      sessions = Agent::Sessions::Adapters::Codex.new(env: env).sessions
       assert_instance_of Enumerator::Lazy, sessions
       assert_equal 1, sessions.first(1).size
     end
@@ -228,7 +228,7 @@ class CodexAdapterTest < Minitest::Test
     with_home do |home, env|
       build_fixture(home)
 
-      check = AgentSessions.verify(:codex, env: env).find { |c| c.claim.include?("archived") }
+      check = Agent::Sessions.verify(:codex, env: env).find { |c| c.claim.include?("archived") }
       refute_nil check, "expected verify to report the archived store"
       assert_equal :drift, check.status
     end

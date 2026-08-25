@@ -382,8 +382,8 @@ class CodexReaderTest < Minitest::Test
     with_home do |home, env|
       write(content, home, ".codex", "sessions", "2026", "07", "21",
             "rollout-2026-07-21T09-12-03-#{UUID}.jsonl")
-      session = AgentSessions.sessions(:codex, env: env).first
-      yield AgentSessions.read(session, **options)
+      session = Agent::Sessions.sessions(:codex, env: env).first
+      yield Agent::Sessions.read(session, **options)
     end
   end
 end

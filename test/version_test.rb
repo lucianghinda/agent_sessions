@@ -4,6 +4,6 @@ require_relative "test_helper"
 
 class VersionTest < Minitest::Test
   def test_has_a_version
-    refute_nil AgentSessions::VERSION
+    refute_nil Agent::Sessions::VERSION
   end
 end

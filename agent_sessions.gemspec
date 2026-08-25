@@ -1,10 +1,10 @@
 # frozen_string_literal: true
 
-require_relative "lib/agent_sessions/version"
+require_relative "lib/agent/sessions/version"
 
 Gem::Specification.new do |spec|
   spec.name = "agent_sessions"
-  spec.version = AgentSessions::VERSION
+  spec.version = Agent::Sessions::VERSION
   spec.authors = ["Lucian Ghinda"]
   spec.email = ["dev@ghinda.com"]
 
@@ -24,4 +24,6 @@ Gem::Specification.new do |spec|
   spec.bindir = "exe"
   spec.executables = ["agent-sessions"]
   spec.require_paths = ["lib"]
+
+  spec.add_dependency "zeitwerk", "~> 2.8"
 end

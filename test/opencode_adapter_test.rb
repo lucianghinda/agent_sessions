@@ -6,7 +6,7 @@ require "sqlite3"
 class OpencodeAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Opencode
+  def adapter_class = Agent::Sessions::Adapters::Opencode
 
   # A real database, not an empty file: Layer 2 queries it. Only the columns the
   # adapter SELECTs are declared; the real table has more (verified 2026-08-05).
@@ -71,13 +71,13 @@ class OpencodeAdapterTest < Minitest::Test
 
   def test_database_is_sqlite_format
     with_home do |_home, env|
-      assert_equal :sqlite, AgentSessions.locate(:opencode, env: env).format
+      assert_equal :sqlite, Agent::Sessions.locate(:opencode, env: env).format
     end
   end
 
   def test_legacy_storage_tree_is_a_separate_optional_layer
     with_home do |_home, env|
-      store = AgentSessions.locate(:opencode, env: env)
+      store = Agent::Sessions.locate(:opencode, env: env)
       legacy = store.layers.find { |l| l.kind == :legacy }
       refute_nil legacy
       assert_equal :json, legacy.format
@@ -87,7 +87,7 @@ class OpencodeAdapterTest < Minitest::Test
   def test_sessions_carry_db_timestamps_and_no_bytes
     with_home do |home, env|
       build_fixture(home)
-      session = AgentSessions::Adapters::Opencode.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Opencode.new(env: env).sessions.first
       assert_equal Time.at(1_752_484_323_000 / 1000.0), session.started_at
       assert_equal Time.at(1_752_490_000_000 / 1000.0), session.updated_at
       assert_nil session.bytes # rows in a shared database have no file size
@@ -98,7 +98,7 @@ class OpencodeAdapterTest < Minitest::Test
   def test_for_project_filters_in_sql
     with_home do |home, env|
       build_db(home, [["ses_a", "/Users/you/app", 1, 2], ["ses_b", "/Users/you/other", 3, 4]])
-      found = AgentSessions::Adapters::Opencode.new(env: env).sessions_for_project("/Users/you/app").force
+      found = Agent::Sessions::Adapters::Opencode.new(env: env).sessions_for_project("/Users/you/app").force
       assert_equal ["ses_a"], found.map(&:id)
     end
   end
@@ -113,7 +113,7 @@ class OpencodeAdapterTest < Minitest::Test
       build_db(home, [["ses_c", "/Users/you/other", 5, 6], ["ses_a", "/Users/you/app", 1, 2],
                       ["ses_b", "/Users/you/app", 3, 4]])
       assert_equal ["/Users/you/app", "/Users/you/other"],
-                   AgentSessions::Adapters::Opencode.new(env: env).project_paths
+                   Agent::Sessions::Adapters::Opencode.new(env: env).project_paths
     end
   end
 
@@ -133,15 +133,15 @@ class OpencodeAdapterTest < Minitest::Test
       db.execute("INSERT INTO session VALUES ('ses_blob', X'#{hex}', 3, 4)")
       db.close
 
-      assert_equal ["/Users/you/app"], AgentSessions::Adapters::Opencode.new(env: env).project_paths
+      assert_equal ["/Users/you/app"], Agent::Sessions::Adapters::Opencode.new(env: env).project_paths
     end
   end
 
   def test_a_corrupt_database_raises_unreadable_store
     with_home do |home, env|
       write("not a database", home, ".local", "share", "opencode", "opencode.db")
-      assert_raises(AgentSessions::UnreadableStore) do
-        AgentSessions::Adapters::Opencode.new(env: env).sessions.force
+      assert_raises(Agent::Sessions::UnreadableStore) do
+        Agent::Sessions::Adapters::Opencode.new(env: env).sessions.force
       end
     end
   end
@@ -161,7 +161,7 @@ class OpencodeAdapterTest < Minitest::Test
   # raised while trying to enumerate a store that isn't there.
   def test_absence_returns_empty_or_no_sessions_from_every_public_method
     with_home do |_home, env|
-      adapter = AgentSessions::Adapters::Opencode.new(env: env)
+      adapter = Agent::Sessions::Adapters::Opencode.new(env: env)
       assert_empty adapter.sessions.force
       assert_empty adapter.sessions_for_project("/Users/you/app").force
       assert_empty adapter.project_paths
@@ -188,7 +188,7 @@ class OpencodeAdapterTest < Minitest::Test
     out, status = run_in_subprocess(<<~RUBY)
       require "tmpdir"
       Dir.mktmpdir do |home|
-        sessions = AgentSessions::Adapters::Opencode.new(env: { "HOME" => home }).sessions.force
+        sessions = Agent::Sessions::Adapters::Opencode.new(env: { "HOME" => home }).sessions.force
         raise "expected no sessions" unless sessions.empty?
         raise "sqlite3 was loaded" if $LOADED_FEATURES.any? { |f| f.include?("sqlite3") }
       end
@@ -225,9 +225,9 @@ class OpencodeAdapterTest < Minitest::Test
         FileUtils.mkdir_p(File.dirname(db_path))
         File.write(db_path, "") # existence is all require_sqlite! needs to be reached
         begin
-          AgentSessions::Adapters::Opencode.new(env: { "HOME" => home }).sessions.force
+          Agent::Sessions::Adapters::Opencode.new(env: { "HOME" => home }).sessions.force
           puts "NO_RAISE"
-        rescue AgentSessions::MissingDependency
+        rescue Agent::Sessions::MissingDependency
           puts "MISSING_DEPENDENCY"
         rescue Exception => e
           puts "\#{e.class}: \#{e.message}"
@@ -251,9 +251,9 @@ class OpencodeAdapterTest < Minitest::Test
   def test_the_connection_is_genuinely_read_only_not_just_by_convention
     with_home do |home, env|
       build_fixture(home)
-      adapter = AgentSessions::Adapters::Opencode.new(env: env)
-      db_path = AgentSessions.locate(:opencode, env: env).effective.path
-      assert_raises(AgentSessions::UnreadableStore) do
+      adapter = Agent::Sessions::Adapters::Opencode.new(env: env)
+      db_path = Agent::Sessions.locate(:opencode, env: env).effective.path
+      assert_raises(Agent::Sessions::UnreadableStore) do
         adapter.send(:each_session_row, db_path, "INSERT INTO session VALUES ('ses_x', '/y', 1, 2)")
       end
     end
@@ -281,8 +281,8 @@ class OpencodeAdapterTest < Minitest::Test
       build_raw_db(File.join(home, "a#b", "opencode", "opencode.db"),
                    [["ses_decoy", "/Users/you/evil", 9, 9]])
 
-      assert_equal real_db, AgentSessions.locate(:opencode, env: env).effective.path
-      sessions = AgentSessions::Adapters::Opencode.new(env: env).sessions.force
+      assert_equal real_db, Agent::Sessions.locate(:opencode, env: env).effective.path
+      sessions = Agent::Sessions::Adapters::Opencode.new(env: env).sessions.force
       assert_equal ["ses_real"], sessions.map(&:id)
     end
   end
@@ -299,7 +299,7 @@ class OpencodeAdapterTest < Minitest::Test
   def test_updated_at_falls_back_to_created_at_when_only_updated_is_malformed
     with_home do |home, env|
       build_malformed_db(home, [["ses_bad_updated", "/Users/you/app", 1_752_484_323_000, "not-a-number"]])
-      session = AgentSessions::Adapters::Opencode.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Opencode.new(env: env).sessions.first
       assert_equal Time.at(1_752_484_323_000 / 1000.0), session.started_at
       assert_equal session.started_at, session.updated_at
       refute_nil session.updated_at
@@ -309,7 +309,7 @@ class OpencodeAdapterTest < Minitest::Test
   def test_updated_at_falls_back_to_the_database_file_mtime_when_both_timestamps_are_malformed
     with_home do |home, env|
       db_path = build_malformed_db(home, [["ses_bad_both", "/Users/you/app", "nope", "nope"]])
-      session = AgentSessions::Adapters::Opencode.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Opencode.new(env: env).sessions.first
       assert_nil session.started_at
       assert_equal File.mtime(db_path), session.updated_at
     end
@@ -322,7 +322,7 @@ class OpencodeAdapterTest < Minitest::Test
     with_home do |home, env|
       build_malformed_db(home, [["ses_ok", "/Users/you/app", 1, 2],
                                  ["ses_bad_both", "/Users/you/other", "x", "y"]])
-      sessions = AgentSessions::Adapters::Opencode.new(env: env).sessions.force
+      sessions = Agent::Sessions::Adapters::Opencode.new(env: env).sessions.force
       assert(sessions.none? { |s| s.updated_at.nil? })
       sorted = sessions.sort_by(&:updated_at)
       assert_equal 2, sorted.size
@@ -339,7 +339,7 @@ class OpencodeAdapterTest < Minitest::Test
   def test_a_non_numeric_created_at_falls_back_to_nil_without_crashing_the_listing
     with_home do |home, env|
       build_malformed_db(home, [["ses_bad", "/Users/you/app", "not-a-number", 2]])
-      sessions = AgentSessions::Adapters::Opencode.new(env: env).sessions.force
+      sessions = Agent::Sessions::Adapters::Opencode.new(env: env).sessions.force
       assert_equal 1, sessions.size, "expected the listing to survive a non-numeric time_created"
       assert_nil sessions.first.started_at
     end
@@ -358,7 +358,7 @@ class OpencodeAdapterTest < Minitest::Test
   def test_a_timestamp_that_already_overflowed_to_infinity_does_not_crash
     with_home do |home, env|
       silence_warnings { build_malformed_db(home, [["ses_huge", "/Users/you/app", 10**400, 2]]) }
-      sessions = AgentSessions::Adapters::Opencode.new(env: env).sessions.force
+      sessions = Agent::Sessions::Adapters::Opencode.new(env: env).sessions.force
       assert_equal 1, sessions.size, "expected the listing to survive an already-Infinity time_created"
       assert_nil sessions.first.started_at
     end
@@ -367,7 +367,7 @@ class OpencodeAdapterTest < Minitest::Test
   def test_a_null_directory_yields_a_nil_project_path_and_is_excluded_from_project_paths
     with_home do |home, env|
       build_malformed_db(home, [["ses_null_dir", nil, 1, 2], ["ses_ok", "/Users/you/app", 3, 4]])
-      adapter = AgentSessions::Adapters::Opencode.new(env: env)
+      adapter = Agent::Sessions::Adapters::Opencode.new(env: env)
       sessions = adapter.sessions.force
       assert_equal 2, sessions.size, "expected the listing to survive a NULL directory"
       null_dir_session = sessions.find { |s| s.id == "ses_null_dir" }
@@ -385,7 +385,7 @@ class OpencodeAdapterTest < Minitest::Test
   def test_a_non_string_directory_is_excluded_rather_than_reaching_the_sort
     with_home do |home, env|
       build_malformed_db(home, [["ses_int_dir", 42, 1, 2], ["ses_ok", "/Users/you/app", 3, 4]])
-      adapter = AgentSessions::Adapters::Opencode.new(env: env)
+      adapter = Agent::Sessions::Adapters::Opencode.new(env: env)
       sessions = adapter.sessions.force
       assert_equal 2, sessions.size, "expected the listing to survive a non-String directory"
       assert_nil sessions.find { |s| s.id == "ses_int_dir" }.project_path
@@ -402,12 +402,12 @@ class OpencodeAdapterTest < Minitest::Test
   # written on, which is why every other branch is exercised by a fixture.
 
   def test_the_macos_application_support_store_is_found
-    skip "macOS-only candidate" unless AgentSessions::Adapters::Base.platform_for == :macos
+    skip "macOS-only candidate" unless Agent::Sessions::Adapters::Base.platform_for == :macos
 
     with_home do |home, env|
       path = File.join(home, "Library", "Application Support", "opencode", "opencode.db")
       build_raw_db(path, [["ses_mac", "/Users/you/app", 1, 2]])
-      assert_equal ["ses_mac"], AgentSessions.sessions(:opencode, env: env).map(&:id).force
+      assert_equal ["ses_mac"], Agent::Sessions.sessions(:opencode, env: env).map(&:id).force
     end
   end
 
@@ -416,7 +416,7 @@ class OpencodeAdapterTest < Minitest::Test
       build_db(home, [["ses_default", "/Users/you/app", 1, 2]])
       elsewhere = File.join(home, "elsewhere")
       build_raw_db(File.join(elsewhere, "opencode.db"), [["ses_env", "/Users/you/app", 1, 2]])
-      found = AgentSessions.sessions(:opencode, env: env.merge("OPENCODE_DATA_DIR" => elsewhere))
+      found = Agent::Sessions.sessions(:opencode, env: env.merge("OPENCODE_DATA_DIR" => elsewhere))
       assert_equal ["ses_env"], found.map(&:id).force
     end
   end
@@ -429,7 +429,7 @@ class OpencodeAdapterTest < Minitest::Test
       empty = File.join(home, "empty")
       FileUtils.mkdir_p(empty)
       build_db(home, [["ses_default", "/Users/you/app", 1, 2]])
-      found = AgentSessions.sessions(:opencode, env: env.merge("OPENCODE_DATA_DIR" => empty))
+      found = Agent::Sessions.sessions(:opencode, env: env.merge("OPENCODE_DATA_DIR" => empty))
       assert_equal ["ses_default"], found.map(&:id).force
     end
   end
@@ -440,8 +440,8 @@ class OpencodeAdapterTest < Minitest::Test
     with_home do |home, env|
       path = File.join(home, ".local", "share", "opencode", "opencode-stable.db")
       build_raw_db(path, [["ses_stable", "/Users/you/app", 1, 2]])
-      assert_equal ["ses_stable"], AgentSessions.sessions(:opencode, env: env).map(&:id).force
-      database = AgentSessions.verify(:opencode, env: env).find { |c| c.claim == "store database exists" }
+      assert_equal ["ses_stable"], Agent::Sessions.sessions(:opencode, env: env).map(&:id).force
+      database = Agent::Sessions.verify(:opencode, env: env).find { |c| c.claim == "store database exists" }
       assert_predicate database, :pass?, "a channel-named database must satisfy the declared store"
       assert_includes database.detail, "opencode-stable.db"
     end
@@ -455,7 +455,7 @@ class OpencodeAdapterTest < Minitest::Test
       build_raw_db(File.join(dir, "opencode.db"), [["ses_shared", "/Users/you/app", 1, 2]])
       build_raw_db(File.join(dir, "opencode-stable.db"), [["ses_shared", "/Users/you/app", 1, 2],
                                                           ["ses_only_stable", "/Users/you/app", 1, 2]])
-      ids = AgentSessions.sessions(:opencode, env: env).map(&:id).force
+      ids = Agent::Sessions.sessions(:opencode, env: env).map(&:id).force
       assert_equal %w[ses_shared ses_only_stable].sort, ids.sort
       assert_equal 1, ids.count("ses_shared")
     end
@@ -468,7 +468,7 @@ class OpencodeAdapterTest < Minitest::Test
       dir = File.join(home, ".local", "share", "opencode")
       build_raw_db(File.join(dir, "opencode.db"), [["s1", "/z/last", 1, 2]])
       build_raw_db(File.join(dir, "opencode-stable.db"), [["s2", "/a/first", 1, 2]])
-      assert_equal ["/a/first", "/z/last"], AgentSessions.projects(:opencode, env: env)
+      assert_equal ["/a/first", "/z/last"], Agent::Sessions.projects(:opencode, env: env)
     end
   end
 

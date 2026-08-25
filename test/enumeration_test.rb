@@ -6,17 +6,17 @@ class EnumerationTest < Minitest::Test
   include FixtureHelpers
 
   def setup
-    AgentSessions.register(FakeAdapter)
+    Agent::Sessions.register(FakeAdapter)
   end
 
   def teardown
-    AgentSessions.registry.delete(:fake)
+    Agent::Sessions.registry.delete(:fake)
   end
 
   def test_sessions_is_lazy_and_scoped_to_one_agent
     with_home do |home, env|
       touch(home, ".fake", "sessions", "a.jsonl")
-      sessions = AgentSessions.sessions(:fake, env: env)
+      sessions = Agent::Sessions.sessions(:fake, env: env)
       assert_instance_of Enumerator::Lazy, sessions
       assert_equal ["a"], sessions.force.map(&:id)
     end
@@ -28,24 +28,24 @@ class EnumerationTest < Minitest::Test
       fresh = touch(home, ".fake", "sessions", "fresh.jsonl")
       FileUtils.touch(old, mtime: Time.now - 3600)
       FileUtils.touch(fresh, mtime: Time.now)
-      ids = AgentSessions.sessions(:fake, env: env, since: Time.now - 60).force.map(&:id)
+      ids = Agent::Sessions.sessions(:fake, env: env, since: Time.now - 60).force.map(&:id)
       assert_equal ["fresh"], ids
 
       # since is inclusive: a session updated exactly at the boundary is in.
       # Without this, mutating >= to > survives.
       assert_equal %w[fresh old],
-                   AgentSessions.sessions(:fake, env: env, since: File.mtime(old)).force.map(&:id).sort
+                   Agent::Sessions.sessions(:fake, env: env, since: File.mtime(old)).force.map(&:id).sort
     end
   end
 
   def test_sessions_raises_on_unknown_agent
-    assert_raises(AgentSessions::UnknownAgent) { AgentSessions.sessions(:nope) }
+    assert_raises(Agent::Sessions::UnknownAgent) { Agent::Sessions.sessions(:nope) }
   end
 
   def test_for_project_sweeps_registered_agents_lazily
     with_home do |home, env|
       touch(home, ".fake", "sessions", "a.jsonl") # fake has no project rule: never matches
-      result = AgentSessions.for_project("/Users/you/app", env: env)
+      result = Agent::Sessions.for_project("/Users/you/app", env: env)
       assert_instance_of Enumerator::Lazy, result
       assert_empty result.force
     end
@@ -60,17 +60,17 @@ class EnumerationTest < Minitest::Test
       write(JSON.generate({ type: "attachment", cwd: "/Users/you/app" }),
             home, ".claude", "projects", "-Users-you-app", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl")
 
-      scoped = AgentSessions.for_project("/Users/you/app", env: env, agents: [:fake]).force
+      scoped = Agent::Sessions.for_project("/Users/you/app", env: env, agents: [:fake]).force
       assert_empty scoped, "expected agents: [:fake] to exclude claude's matching session"
 
-      unscoped = AgentSessions.for_project("/Users/you/app", env: env).force
+      unscoped = Agent::Sessions.for_project("/Users/you/app", env: env).force
       assert_equal [:claude], unscoped.map(&:agent), "control: unscoped must find it"
     end
   end
 
   def test_for_project_rejects_unknown_agents_in_the_scope
-    assert_raises(AgentSessions::UnknownAgent) do
-      AgentSessions.for_project("/x", env: { "HOME" => "/h" }, agents: [:nope])
+    assert_raises(Agent::Sessions::UnknownAgent) do
+      Agent::Sessions.for_project("/x", env: { "HOME" => "/h" }, agents: [:nope])
     end
   end
 
@@ -84,8 +84,8 @@ class EnumerationTest < Minitest::Test
       write(JSON.generate({ type: "attachment", cwd: "/Users/you/app" }),
             home, ".claude", "projects", "-Users-you-app", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl")
 
-      assert_equal ["/Users/you/app"], AgentSessions.projects(:claude, env: env)
-      assert_empty AgentSessions.projects(:fake, env: env), "the agent argument must pick the adapter"
+      assert_equal ["/Users/you/app"], Agent::Sessions.projects(:claude, env: env)
+      assert_empty Agent::Sessions.projects(:fake, env: env), "the agent argument must pick the adapter"
     end
   end
 
@@ -102,8 +102,8 @@ class EnumerationTest < Minitest::Test
       write(JSON.generate({ type: "attachment", cwd: "/Users/you/app" }),
             home, ".claude", "projects", "-Users-you-app", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl")
 
-      assert_equal 2, AgentSessions.unresolved_project_count(:fake, env: env)
-      assert_equal 0, AgentSessions.unresolved_project_count(:claude, env: env)
+      assert_equal 2, Agent::Sessions.unresolved_project_count(:fake, env: env)
+      assert_equal 0, Agent::Sessions.unresolved_project_count(:claude, env: env)
     end
   end
 
@@ -120,10 +120,10 @@ class EnumerationTest < Minitest::Test
   # exists to police. teardown's own `registry.delete(:fake)` still runs
   # after this test and is a harmless no-op against an already-missing key.
   def test_every_registered_adapter_opts_into_layer_2_conformance
-    AgentSessions.registry.delete(:fake)
+    Agent::Sessions.registry.delete(:fake)
 
-    missing = AgentSessions.agents.reject do |agent|
-      klass = AgentSessions.registry.fetch(agent)
+    missing = Agent::Sessions.agents.reject do |agent|
+      klass = Agent::Sessions.registry.fetch(agent)
       test_class = ObjectSpace.each_object(Class).find do |candidate|
         candidate < Minitest::Test &&
           candidate.method_defined?(:adapter_class) &&

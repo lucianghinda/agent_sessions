@@ -5,7 +5,7 @@ require_relative "test_helper"
 class ClaudeAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Claude
+  def adapter_class = Agent::Sessions::Adapters::Claude
 
   # Mirrors the real invariant: the project directory name is the encoded cwd
   # recorded inside the file. Real sessions open with a kebab-case preamble
@@ -27,7 +27,7 @@ class ClaudeAdapterTest < Minitest::Test
 
   def test_retention_defaults_to_30_days
     with_home do |_home, env|
-      store = AgentSessions.locate(:claude, env: env)
+      store = Agent::Sessions.locate(:claude, env: env)
       assert_equal 30, store.retention
       assert_equal :default, store.retention_source
     end
@@ -36,7 +36,7 @@ class ClaudeAdapterTest < Minitest::Test
   def test_retention_reads_cleanup_period_from_settings
     with_home do |home, env|
       write('{"cleanupPeriodDays": 7}', home, ".claude", "settings.json")
-      store = AgentSessions.locate(:claude, env: env)
+      store = Agent::Sessions.locate(:claude, env: env)
       assert_equal 7, store.retention
       assert_equal :setting, store.retention_source
     end
@@ -45,7 +45,7 @@ class ClaudeAdapterTest < Minitest::Test
   def test_corrupt_settings_fall_back_to_default
     with_home do |home, env|
       write("{not json", home, ".claude", "settings.json")
-      store = AgentSessions.locate(:claude, env: env)
+      store = Agent::Sessions.locate(:claude, env: env)
       assert_equal 30, store.retention
     end
   end
@@ -54,7 +54,7 @@ class ClaudeAdapterTest < Minitest::Test
     [nil, "7", 7.5, -5].each do |value|
       with_home do |home, env|
         write(JSON.generate({ "cleanupPeriodDays" => value }), home, ".claude", "settings.json")
-        store = AgentSessions.locate(:claude, env: env)
+        store = Agent::Sessions.locate(:claude, env: env)
         assert_equal 30, store.retention, "expected #{value.inspect} to fall back"
         assert_equal :default, store.retention_source, "expected #{value.inspect} to report :default"
       end
@@ -64,7 +64,7 @@ class ClaudeAdapterTest < Minitest::Test
   def test_zero_retention_is_a_real_setting
     with_home do |home, env|
       write('{"cleanupPeriodDays": 0}', home, ".claude", "settings.json")
-      store = AgentSessions.locate(:claude, env: env)
+      store = Agent::Sessions.locate(:claude, env: env)
       assert_equal 0, store.retention
       assert_equal :setting, store.retention_source
     end
@@ -72,20 +72,20 @@ class ClaudeAdapterTest < Minitest::Test
 
   def test_skip_prompt_history_env_adds_warning
     with_home do |_home, env|
-      store = AgentSessions.locate(:claude, env: env.merge("CLAUDE_CODE_SKIP_PROMPT_HISTORY" => "1"))
+      store = Agent::Sessions.locate(:claude, env: env.merge("CLAUDE_CODE_SKIP_PROMPT_HISTORY" => "1"))
       assert(store.warnings.any? { |w| w.include?("CLAUDE_CODE_SKIP_PROMPT_HISTORY") })
     end
   end
 
   def test_no_history_warning_by_default
     with_home do |_home, env|
-      store = AgentSessions.locate(:claude, env: env)
+      store = Agent::Sessions.locate(:claude, env: env)
       refute(store.warnings.any? { |w| w.include?("CLAUDE_CODE_SKIP_PROMPT_HISTORY") })
     end
   end
 
   def test_encode_project_collapses_every_non_alphanumeric_to_a_dash
-    adapter = AgentSessions::Adapters::Claude.new(env: { "HOME" => "/h" })
+    adapter = Agent::Sessions::Adapters::Claude.new(env: { "HOME" => "/h" })
     assert_equal "-Users-you-state-of-mind-til", adapter.encode_project("/Users/you/state_of_mind/til")
     assert_equal "-Users-you--config", adapter.encode_project("/Users/you/.config")
   end
@@ -97,7 +97,7 @@ class ClaudeAdapterTest < Minitest::Test
       lines = Array.new(24) { JSON.generate({ type: "file-history-snapshot" }) }
       lines << JSON.generate({ type: "attachment", cwd: "/Users/you/app" })
       write("#{lines.join("\n")}\n", home, ".claude", "projects", "-Users-you-app", "cccccccc-0000-4000-8000-000000000001.jsonl")
-      session = AgentSessions::Adapters::Claude.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Claude.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end
@@ -110,13 +110,13 @@ class ClaudeAdapterTest < Minitest::Test
       lines = Array.new(25) { JSON.generate({ type: "file-history-snapshot" }) }
       lines << JSON.generate({ type: "attachment", cwd: "/Users/you/app" })
       write("#{lines.join("\n")}\n", home, ".claude", "projects", "-Users-you-app", "dddddddd-0000-4000-8000-000000000002.jsonl")
-      session = AgentSessions::Adapters::Claude.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Claude.new(env: env).sessions.first
       assert_nil session.project_path
     end
   end
 
   def test_fidelity_is_full
-    assert_equal :full, AgentSessions::Adapters::Claude.fidelity_value
+    assert_equal :full, Agent::Sessions::Adapters::Claude.fidelity_value
   end
 
   # A record carrying "cwd": null must not shadow a later, usable record —
@@ -128,7 +128,7 @@ class ClaudeAdapterTest < Minitest::Test
       content = "#{JSON.generate({ type: "attachment", cwd: nil })}\n" \
                 "#{JSON.generate({ type: "attachment", cwd: "/Users/you/app" })}\n"
       write(content, home, ".claude", "projects", "-Users-you-app", "eeeeeeee-0000-4000-8000-000000000003.jsonl")
-      session = AgentSessions::Adapters::Claude.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Claude.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end
@@ -142,7 +142,7 @@ class ClaudeAdapterTest < Minitest::Test
       write(JSON.generate({ type: "attachment", cwd: { "nested" => true } }), home, ".claude", "projects", "-Users-you-hash",
             "11111111-0000-4000-8000-000000000005.jsonl")
       build_fixture(home)
-      paths = AgentSessions::Adapters::Claude.new(env: env).project_paths
+      paths = Agent::Sessions::Adapters::Claude.new(env: env).project_paths
       assert_equal [expected_project_path], paths
     end
   end
@@ -173,7 +173,7 @@ class ClaudeAdapterTest < Minitest::Test
       # An unrelated project must not be swept in.
       write_session(home, "-Users-you-other", "55555555-0000-4000-8000-000000000009", "/Users/you/other")
 
-      found = AgentSessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/hunk-review-changes").force
+      found = Agent::Sessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/hunk-review-changes").force
       assert_equal %w[22222222-0000-4000-8000-000000000006 33333333-0000-4000-8000-000000000007
                       44444444-0000-4000-8000-000000000008], found.map(&:id).sort
     end
@@ -187,7 +187,7 @@ class ClaudeAdapterTest < Minitest::Test
       filler = Array.new(30) { JSON.generate({ type: "file-history-snapshot" }) } # no cwd anywhere — unreadable
       write("#{filler.join("\n")}\n", home, ".claude", "projects", "-Users-you-app", "77777777-0000-4000-8000-00000000000b.jsonl")
 
-      found = AgentSessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/app").force
+      found = Agent::Sessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/app").force
       assert_equal ["77777777-0000-4000-8000-00000000000b"], found.map(&:id)
     end
   end
@@ -205,7 +205,7 @@ class ClaudeAdapterTest < Minitest::Test
                     "/Users/you/hunk-review-changes")
       write_session(home, "-Users-you-review-hunk-changes", "66666666-0000-4000-8000-00000000000a",
                     "/Users/you/review-hunk-changes")
-      found = AgentSessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/review-hunk-changes").force
+      found = Agent::Sessions::Adapters::Claude.new(env: env).sessions_for_project("/Users/you/review-hunk-changes").force
       assert_equal %w[66666666-0000-4000-8000-00000000000a], found.map(&:id)
     end
   end
@@ -224,7 +224,7 @@ class ClaudeAdapterTest < Minitest::Test
       write("b" * 40, sidecar, "subagents", "agent-0198fa3c1122.meta.json")
       write("c" * 60, sidecar, "tool-results", "hook-1-additionalContext.txt")
 
-      session = AgentSessions.sessions(:claude, env: env).first
+      session = Agent::Sessions.sessions(:claude, env: env).first
       assert_equal File.size(path) + 200, session.bytes
     end
   end
@@ -236,7 +236,7 @@ class ClaudeAdapterTest < Minitest::Test
       path = write_session(home, "-Users-you-app", expected_session_id, "/Users/you/app")
       write("x" * 25, File.dirname(path), expected_session_id, ".DS_Store")
 
-      session = AgentSessions.sessions(:claude, env: env).first
+      session = Agent::Sessions.sessions(:claude, env: env).first
       assert_equal File.size(path) + 25, session.bytes
     end
   end
@@ -247,7 +247,7 @@ class ClaudeAdapterTest < Minitest::Test
     with_home do |home, env|
       path = write_session(home, "-Users-you-app", expected_session_id, "/Users/you/app")
 
-      session = AgentSessions.sessions(:claude, env: env).first
+      session = Agent::Sessions.sessions(:claude, env: env).first
       assert_equal File.size(path), session.bytes
     end
   end
@@ -262,7 +262,7 @@ class ClaudeAdapterTest < Minitest::Test
       File.chmod(0o000, sidecar)
 
       begin
-        session = AgentSessions.sessions(:claude, env: env).first
+        session = Agent::Sessions.sessions(:claude, env: env).first
         refute_nil session
         assert_operator session.bytes, :>=, File.size(path)
       ensure

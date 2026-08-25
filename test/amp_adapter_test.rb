@@ -5,7 +5,7 @@ require_relative "test_helper"
 class AmpAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Amp
+  def adapter_class = Agent::Sessions::Adapters::Amp
 
   # Real thread shape, verified 2026-08-05: created is epoch ms and
   # env.initial.trees[0].uri carries the project as a file:// URI.
@@ -28,7 +28,7 @@ class AmpAdapterTest < Minitest::Test
 
   def test_partly_documented_is_not_documented
     with_home do |_home, env|
-      store = AgentSessions.locate(:amp, env: env)
+      store = Agent::Sessions.locate(:amp, env: env)
       assert_equal :partly, store.documented
       refute store.documented?
     end
@@ -36,7 +36,7 @@ class AmpAdapterTest < Minitest::Test
 
   def test_warns_that_local_copy_is_partial
     with_home do |_home, env|
-      store = AgentSessions.locate(:amp, env: env)
+      store = Agent::Sessions.locate(:amp, env: env)
       assert(store.warnings.any? { |w| w.include?("canonical") })
     end
   end
@@ -45,7 +45,7 @@ class AmpAdapterTest < Minitest::Test
   # can still report a plaintext token file sitting inside a sync folder.
   def test_secrets_stays_a_layer_so_audit_can_see_it
     with_home do |_home, env|
-      store = AgentSessions.locate(:amp, env: env)
+      store = Agent::Sessions.locate(:amp, env: env)
       assert_includes store.layers.map(&:kind), :secrets
     end
   end
@@ -54,7 +54,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "file:///Users/you/My%20Drive/app" }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-b.json")
-      session = AgentSessions::Adapters::Amp.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Amp.new(env: env).sessions.first
       assert_equal "/Users/you/My Drive/app", session.project_path
     end
   end
@@ -63,12 +63,12 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       write(JSON.generate({ id: "T-c", messages: [] }),
             home, ".local", "share", "amp", "threads", "T-c.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
   def test_fidelity_is_messages
-    assert_equal :messages, AgentSessions::Adapters::Amp.fidelity_value
+    assert_equal :messages, Agent::Sessions::Adapters::Amp.fidelity_value
   end
 
   # --- Malformed-shape guards -------------------------------------------------
@@ -93,7 +93,7 @@ class AmpAdapterTest < Minitest::Test
   def test_project_path_returns_nil_when_the_whole_thread_is_not_a_hash
     with_home do |home, env|
       write(JSON.generate([1, 2, 3]), home, ".local", "share", "amp", "threads", "T-array.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -101,7 +101,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: [1, 2] }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-env-array.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -109,7 +109,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: [1, 2] } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-initial-array.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -117,7 +117,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: 5 } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-trees-integer.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -125,7 +125,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [[1, 2]] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-tree-array.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -140,7 +140,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: { a: 1 } }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-uri-hash.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -156,7 +156,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "https:///Users/you/x" }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-https.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -164,7 +164,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "file://localhost/Users/you/app" }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-localhost.json")
-      session = AgentSessions::Adapters::Amp.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Amp.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end
@@ -173,7 +173,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "file://nas/share" }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-nas.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -181,7 +181,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "file:relative/path" }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-relative.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -192,7 +192,7 @@ class AmpAdapterTest < Minitest::Test
         write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-empty-#{i}.json")
       end
 
-      sessions = AgentSessions::Adapters::Amp.new(env: env).sessions.force
+      sessions = Agent::Sessions::Adapters::Amp.new(env: env).sessions.force
       assert_equal 3, sessions.size
       assert_empty sessions.filter_map(&:project_path)
     end
@@ -205,7 +205,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "file:///" }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-root.json")
-      assert_equal "/", AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_equal "/", Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -215,7 +215,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "file:///Users/you/app//" }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-slashes.json")
-      assert_equal "/Users/you/app", AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_equal "/Users/you/app", Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -225,9 +225,9 @@ class AmpAdapterTest < Minitest::Test
   # agent and is worth reading before adopting the gem.
   def test_multi_root_warning_appears_only_once_the_store_exists
     with_home do |home, env|
-      refute(AgentSessions.locate(:amp, env: env).warnings.any? { |w| w.include?("workspace tree") })
+      refute(Agent::Sessions.locate(:amp, env: env).warnings.any? { |w| w.include?("workspace tree") })
       build_fixture(home)
-      assert(AgentSessions.locate(:amp, env: env).warnings.any? { |w| w.include?("workspace tree") })
+      assert(Agent::Sessions.locate(:amp, env: env).warnings.any? { |w| w.include?("workspace tree") })
     end
   end
 
@@ -235,7 +235,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "file:///Users/you/app/" }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-trailing.json")
-      session = AgentSessions::Adapters::Amp.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Amp.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end
@@ -244,7 +244,7 @@ class AmpAdapterTest < Minitest::Test
     with_home do |home, env|
       thread = { env: { initial: { trees: [{ uri: "file:///Users/you/a b" }] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-unescaped.json")
-      assert_nil AgentSessions::Adapters::Amp.new(env: env).sessions.first.project_path
+      assert_nil Agent::Sessions::Adapters::Amp.new(env: env).sessions.first.project_path
     end
   end
 
@@ -255,7 +255,7 @@ class AmpAdapterTest < Minitest::Test
         { uri: "file:///Users/you/second" }
       ] } } }
       write(JSON.generate(thread), home, ".local", "share", "amp", "threads", "T-multi.json")
-      session = AgentSessions::Adapters::Amp.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Amp.new(env: env).sessions.first
       assert_equal "/Users/you/first", session.project_path
     end
   end
@@ -277,7 +277,7 @@ class AmpAdapterTest < Minitest::Test
       write(JSON.generate({ env: { initial: { trees: [{ uri: "file:relative/path" }] } } }),
             home, ".local", "share", "amp", "threads", "T-bad-uri.json")
 
-      adapter = AgentSessions::Adapters::Amp.new(env: env)
+      adapter = Agent::Sessions::Adapters::Amp.new(env: env)
       sessions = adapter.sessions.force
       assert_equal 3, sessions.size, "expected the listing to survive both malformed threads"
       assert_equal [expected_project_path], adapter.project_paths

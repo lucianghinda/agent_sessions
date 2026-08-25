@@ -10,7 +10,7 @@ require "sqlite3"
 class CopilotAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Copilot
+  def adapter_class = Agent::Sessions::Adapters::Copilot
 
   def build_fixture(home)
     build_db(home, [[SESSION, "/Users/you/app", CREATED, UPDATED]])
@@ -27,7 +27,7 @@ class CopilotAdapterTest < Minitest::Test
   def test_timestamps_are_parsed_as_iso8601
     with_home do |home, env|
       build_fixture(home)
-      session = AgentSessions.sessions(:copilot, env: env).first
+      session = Agent::Sessions.sessions(:copilot, env: env).first
       # Compared against the parsed value, not a Time.utc with float seconds:
       # 1.288 becomes a Rational there and does not compare equal to the
       # millisecond Time.iso8601 produces.
@@ -41,7 +41,7 @@ class CopilotAdapterTest < Minitest::Test
   def test_an_unparseable_timestamp_still_leaves_an_updated_at
     with_home do |home, env|
       build_db(home, [[SESSION, "/Users/you/app", "not a time", "also not a time"]])
-      session = AgentSessions.sessions(:copilot, env: env).first
+      session = Agent::Sessions.sessions(:copilot, env: env).first
       assert_nil session.started_at
       refute_nil session.updated_at
     end
@@ -49,7 +49,7 @@ class CopilotAdapterTest < Minitest::Test
 
   def test_the_store_is_a_single_sqlite_file
     with_home do |_home, env|
-      store = AgentSessions.locate(:copilot, env: env)
+      store = Agent::Sessions.locate(:copilot, env: env)
       assert_equal :sqlite, store.format
       assert_predicate store.effective, :single_file
     end
@@ -59,14 +59,14 @@ class CopilotAdapterTest < Minitest::Test
   # says so rather than letting a caller read nil as zero.
   def test_absent_token_usage_is_declared
     with_home do |_home, env|
-      assert(AgentSessions.locate(:copilot, env: env).warnings.any? { |w| w.include?("token usage") })
+      assert(Agent::Sessions.locate(:copilot, env: env).warnings.any? { |w| w.include?("token usage") })
     end
   end
 
   def test_a_reader_over_an_empty_turns_table_yields_nothing_without_warning
     with_home do |home, env|
       build_fixture(home)
-      reader = AgentSessions.read(AgentSessions.sessions(:copilot, env: env).first)
+      reader = Agent::Sessions.read(Agent::Sessions.sessions(:copilot, env: env).first)
       assert_empty reader.messages
       assert_empty reader.warnings
       assert_nil reader.usage
@@ -79,7 +79,7 @@ class CopilotAdapterTest < Minitest::Test
     with_home do |home, env|
       build_fixture(home)
       insert_turn(home, turn_index: 0, user: "hello", reply: "hi there")
-      reader = AgentSessions.read(AgentSessions.sessions(:copilot, env: env).first)
+      reader = Agent::Sessions.read(Agent::Sessions.sessions(:copilot, env: env).first)
       assert_equal %i[user assistant], reader.messages.map(&:role)
       assert_equal ["hello", "hi there"], reader.messages.map(&:text)
       assert_equal reader.messages.first.raw, reader.messages.last.raw
@@ -91,7 +91,7 @@ class CopilotAdapterTest < Minitest::Test
       build_fixture(home)
       insert_turn(home, turn_index: 1, user: "second", reply: nil)
       insert_turn(home, turn_index: 0, user: "first", reply: nil)
-      reader = AgentSessions.read(AgentSessions.sessions(:copilot, env: env).first)
+      reader = Agent::Sessions.read(Agent::Sessions.sessions(:copilot, env: env).first)
       assert_equal %w[first second], reader.messages.map(&:text)
     end
   end
@@ -102,7 +102,7 @@ class CopilotAdapterTest < Minitest::Test
     with_home do |home, env|
       build_fixture(home)
       insert_turn(home, turn_index: 0, user: "hello", reply: "")
-      reader = AgentSessions.read(AgentSessions.sessions(:copilot, env: env).first)
+      reader = Agent::Sessions.read(Agent::Sessions.sessions(:copilot, env: env).first)
       assert_equal [:user], reader.messages.map(&:role)
     end
   end

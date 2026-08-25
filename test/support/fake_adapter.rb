@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-class FakeAdapter < AgentSessions::Adapters::Base
+class FakeAdapter < Agent::Sessions::Adapters::Base
   agent :fake
   label "Fake Agent"
   documented true

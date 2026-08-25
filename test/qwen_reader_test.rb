@@ -116,6 +116,6 @@ class QwenReaderTest < Minitest::Test
   end
 
   def read_session(env, **options)
-    AgentSessions.read(AgentSessions.sessions(:qwen, env: env).first, **options)
+    Agent::Sessions.read(Agent::Sessions.sessions(:qwen, env: env).first, **options)
   end
 end

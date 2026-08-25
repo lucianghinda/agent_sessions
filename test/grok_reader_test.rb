@@ -136,6 +136,6 @@ class GrokReaderTest < Minitest::Test
   end
 
   def read_session(env, **options)
-    AgentSessions.read(AgentSessions.sessions(:grok, env: env).first, **options)
+    Agent::Sessions.read(Agent::Sessions.sessions(:grok, env: env).first, **options)
   end
 end

@@ -10,7 +10,7 @@ module Agent
             verified_on "2026-07-21"
             fidelity :messages
 
-            base_dir default: "~/.local/share/amp", env: "XDG_DATA_HOME", env_join: "amp"
+            homedir :amp, report_env: ["XDG_DATA_HOME"]
 
             store :threads, dir: "threads", glob: "T-*.json", format: :json
             # Design doc 8.4: Amp's local layout drifts between machines, so threads/ is the

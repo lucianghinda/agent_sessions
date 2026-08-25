@@ -338,7 +338,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.bad_path"
+      homedir :bad_path_homedir, entry: { paths: "~/.bad_path" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions
@@ -374,7 +374,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.sizeless"
+      homedir :sizeless_list_homedir, entry: { paths: "~/.sizeless" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions
@@ -495,7 +495,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.blocked"
+      homedir :blocked_homedir, entry: { paths: "~/.blocked" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions = raise Agent::Sessions::MissingDependency, "needs a gem"
@@ -525,7 +525,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.broken"
+      homedir :broken_list_homedir, entry: { paths: "~/.broken" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions = raise Agent::Sessions::UnreadableStore, "database is locked"
@@ -597,7 +597,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.sizeless"
+      homedir :sizeless_du_homedir, entry: { paths: "~/.sizeless" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions
@@ -632,7 +632,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.mixed"
+      homedir :mixed_homedir, entry: { paths: "~/.mixed" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions
@@ -730,7 +730,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.broken"
+      homedir :broken_du_homedir, entry: { paths: "~/.broken" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions = raise Agent::Sessions::UnreadableStore, "database is locked"
@@ -762,7 +762,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.big_unknown"
+      homedir :big_unknown_homedir, entry: { paths: "~/.big_unknown" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions
@@ -779,7 +779,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.small_unknown"
+      homedir :small_unknown_homedir, entry: { paths: "~/.small_unknown" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions
@@ -827,7 +827,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.small"
+      homedir :small_homedir, entry: { paths: "~/.small" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions
@@ -866,7 +866,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.flagged"
+      homedir :flagged_homedir, entry: { paths: "~/.flagged" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def warnings
@@ -905,7 +905,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.never-installed-anywhere"
+      homedir :uninstalled_homedir, entry: { paths: "~/.never-installed-anywhere" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def warnings
@@ -938,7 +938,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.quiet"
+      homedir :quiet_homedir, entry: { paths: "~/.quiet" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
       # No warnings declared at all -- Base#warnings returns [].
     end
@@ -965,7 +965,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.broken_and_warned"
+      homedir :broken_and_warned_homedir, entry: { paths: "~/.broken_and_warned" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def warnings
@@ -1004,7 +1004,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.flagged_with_rows"
+      homedir :flagged_with_rows_homedir, entry: { paths: "~/.flagged_with_rows" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def warnings
@@ -1038,7 +1038,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.flagged_two_warnings"
+      homedir :flagged_two_warnings_homedir, entry: { paths: "~/.flagged_two_warnings" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       warning "an always-present warning"
@@ -1169,7 +1169,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.nine"
+      homedir :nine_homedir, entry: { paths: "~/.nine" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions
@@ -1186,7 +1186,7 @@ class CLITest < Minitest::Test
       documented true
       verified_on "2026-07-01"
       fidelity :full
-      base_dir default: "~/.one"
+      homedir :one_homedir, entry: { paths: "~/.one" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def sessions

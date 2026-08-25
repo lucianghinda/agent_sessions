@@ -28,9 +28,7 @@ module Agent
               # what a reader could reconstruct from its format.
               def fidelity_value = @fidelity_value || :unsupported
 
-              def base_dir_config
-                @base_dir_config || raise(Error, "#{inspect} declares no base_dir")
-              end
+              def homedir_config = @homedir_config || raise(Error, "#{inspect} declares no homedir")
 
               def store_configs
                 @store_configs || raise(Error, "#{inspect} declares no store")
@@ -56,19 +54,8 @@ module Agent
                 @fidelity_value = value
               end
 
-              # default: is a String, or a Hash keyed by platform (:macos, :linux,
-              # :windows) for a store the agent puts somewhere different on each OS.
-              # An IDE-hosted agent needs the Hash form — Cursor keeps its globalStorage
-              # under ~/Library/Application Support on macOS, ~/.config on Linux and
-              # %APPDATA% on Windows, three genuinely different locations for one store,
-              # not one path with a different separator.
-              #
-              # A Hash missing this machine's platform raises at resolution rather than
-              # falling back to another platform's path: guessing would report an agent
-              # as absent on a platform nobody verified, which is exactly the claim this
-              # gem refuses to make.
-              def base_dir(default:, env: nil, env_join: nil)
-                @base_dir_config = { default: default, env: env, env_join: env_join }
+              def homedir(name, join: nil, report_env: [], entry: nil)
+                @homedir_config = { name:, join:, report_env:, entry: }
               end
 
               def store(kind, format:, dir: nil, path: nil, glob: nil, env: nil, optional: false)
@@ -144,28 +131,10 @@ module Agent
             end
 
             def base_dir
-              config = self.class.base_dir_config
-              override = presence(config[:env] && @env[config[:env]])
-              if override
-                expand(config[:env_join] ? File.join(override, config[:env_join]) : override)
-              else
-                expand(default_for_platform(config[:default]))
-              end
-            end
-
-            # Which OS family this is running on, as the base_dir Hash keys spell it.
-            # RbConfig's host_os, not RUBY_PLATFORM: the same values, but host_os is
-            # what every other Ruby library matches on, and matching two spellings of
-            # the same question in one codebase invites them to disagree.
-            #
-            # Public so a caller can ask what this machine resolved as — and so a test
-            # can drive all three branches without stubbing a constant, which is the
-            # alternative and a worse one.
-            def self.platform_for(host_os = RbConfig::CONFIG["host_os"])
-              case host_os
-              when /darwin|mac os/ then :macos
-              when /mswin|mingw|cygwin/ then :windows
-              else :linux
+              @base_dir ||= begin
+                config = self.class.homedir_config
+                root = resolver.home(config[:name]).to_s
+                config[:join] ? File.join(root, config[:join]) : root
               end
             end
 
@@ -178,16 +147,21 @@ module Agent
 
             private
 
-            # A String default is the same on every platform. A Hash must name this
-            # one: see base_dir's DSL comment for why a missing key raises instead of
-            # falling back.
-            def default_for_platform(default)
-              return default unless default.is_a?(Hash)
-
-              platform = self.class.platform_for
-              default.fetch(platform) do
-                raise Error, "#{self.class.inspect} declares no base_dir for #{platform}"
+            def resolver
+              @resolver ||= begin
+                config = self.class.homedir_config
+                options = { env: @env.to_h, home: home }
+                options[:entries] = { config[:name] => injected_entry(config) } if config[:entry]
+                Agent::Homedir::Resolver.new(**options)
               end
+            end
+
+            def injected_entry(config)
+              {
+                label: self.class.label_text || config[:name].to_s,
+                env: nil,
+                verified_on: nil
+              }.merge(config[:entry])
             end
 
             def layers
@@ -214,12 +188,13 @@ module Agent
             end
 
             def env_overrides
-              names = [self.class.base_dir_config[:env], *self.class.store_configs.map { |c| c[:env] }]
+              config = self.class.homedir_config
+              names = [resolver[config[:name]].env_override, *config[:report_env], *self.class.store_configs.map { |c| c[:env] }]
               names.compact.uniq.map { |name| EnvOverride.new(name: name, value: presence(@env[name])) }
             end
 
             def presence(value)
-              value && !value.empty? ? value : nil
+              value.to_s.strip.empty? ? nil : value
             end
 
             # Location#files escapes its own path for the reason its comment gives —

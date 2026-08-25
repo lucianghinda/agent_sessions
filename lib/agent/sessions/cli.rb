@@ -44,7 +44,7 @@ module Agent
         # still matters for `list`'s own option parsing (a malformed --since is
         # an Agent::Sessions::Error) and stays here as the backstop for whichever
         # future command calls into Layer 2 without its own per-agent rescue.
-        rescue Agent::Sessions::Error, OptionParser::ParseError => e
+        rescue Agent::Sessions::Error, Agent::Homedir::Error, OptionParser::ParseError => e
           @stderr.puts e.message
           1
         end

@@ -10,7 +10,7 @@ module Agent
             verified_on "2026-08-05"
             fidelity :full
 
-            base_dir default: "~/.claude", env: "CLAUDE_CONFIG_DIR"
+            homedir :claude_code
 
             store :projects, dir: "projects", glob: "*/*.jsonl", format: :jsonl
             store :history, path: "history.jsonl", format: :jsonl, optional: true

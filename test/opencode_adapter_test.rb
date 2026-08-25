@@ -84,6 +84,28 @@ class OpencodeAdapterTest < Minitest::Test
     end
   end
 
+  def test_opencode_data_dir_is_reported_as_an_env_override
+    store = Agent::Sessions.locate(:opencode, env: { "HOME" => "/h", "OPENCODE_DATA_DIR" => "/override/opencode" })
+    override = store.env_overrides.find { |candidate| candidate.name == "OPENCODE_DATA_DIR" }
+    refute_nil override
+    assert override.active?
+    assert_equal "/override/opencode", override.value
+  end
+
+  def test_blank_opencode_data_dir_falls_back_to_the_resolved_default
+    with_home do |home, env|
+      store = Agent::Sessions.locate(:opencode, env: env.merge("OPENCODE_DATA_DIR" => "   "))
+      assert_equal File.join(home, ".local", "share", "opencode", "opencode.db"), store.effective.path
+    end
+  end
+
+  def test_relative_xdg_data_home_falls_back_to_the_home_default
+    with_home do |home, env|
+      store = Agent::Sessions.locate(:opencode, env: env.merge("XDG_DATA_HOME" => "relative/data"))
+      assert_equal File.join(home, ".local", "share", "opencode", "opencode.db"), store.effective.path
+    end
+  end
+
   def test_sessions_carry_db_timestamps_and_no_bytes
     with_home do |home, env|
       build_fixture(home)
@@ -268,7 +290,7 @@ class OpencodeAdapterTest < Minitest::Test
   # between db_path and being partial URI grammar.
   def test_a_path_containing_a_percent_encoded_looking_segment_reads_the_right_database
     with_home do |home, env|
-      # base_dir with XDG_DATA_HOME set + env_join: "opencode" resolves to
+      # The homedir resolver joins XDG_DATA_HOME with "opencode", yielding
       # <XDG_DATA_HOME>/opencode/opencode.db — build the real database at
       # exactly that path, under a directory literally named "a%23b".
       env = env.merge("XDG_DATA_HOME" => File.join(home, "a%23b"))
@@ -402,7 +424,7 @@ class OpencodeAdapterTest < Minitest::Test
   # written on, which is why every other branch is exercised by a fixture.
 
   def test_the_macos_application_support_store_is_found
-    skip "macOS-only candidate" unless Agent::Sessions::Adapters::Base.platform_for == :macos
+    skip "macOS-only candidate" unless Agent::Homedir::Resolver.default_os == :macos
 
     with_home do |home, env|
       path = File.join(home, "Library", "Application Support", "opencode", "opencode.db")

@@ -22,7 +22,7 @@ module Agent
 
             def self.reader_class = Readers::Gemini
 
-            base_dir default: "~/.gemini"
+            homedir :gemini
 
             store :chats, dir: "tmp", glob: "*/chats/session-*.json", format: :json
             store :projects, path: "projects.json", format: :json, optional: true

@@ -17,7 +17,7 @@ module Agent
             # what remains unverified.
             def self.reader_class = Readers::Pi
 
-            base_dir default: "~/.pi/agent", env: "PI_CODING_AGENT_DIR"
+            homedir :pi
 
             store :sessions, dir: "sessions", glob: "--*--/*.jsonl", format: :jsonl,
                              env: "PI_CODING_AGENT_SESSION_DIR"

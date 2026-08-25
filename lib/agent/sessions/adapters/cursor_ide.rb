@@ -24,20 +24,7 @@ module Agent
             verified_on "2026-08-24"
             fidelity :metadata
 
-            # Cursor is VS Code-derived, so its globalStorage follows the editor's
-            # own per-OS convention rather than one path with different separators.
-            # macOS is verified; the other two are the VS Code layout Cursor
-            # inherits, unverified here and declared as such in `warnings`.
-            #
-            # No env override. XDG_CONFIG_HOME was assumed for the OLD ~/.cursor
-            # location and disproved on 2026-08-04; whether it moves globalStorage
-            # on Linux is untested, so nothing is honoured rather than honouring a
-            # variable that might silently point the adapter at an empty path.
-            base_dir default: {
-              macos: "~/Library/Application Support/Cursor/User/globalStorage",
-              linux: "~/.config/Cursor/User/globalStorage",
-              windows: "~/AppData/Roaming/Cursor/User/globalStorage"
-            }
+            homedir :cursor_ide, join: "User/globalStorage"
 
             store :database, path: "state.vscdb", format: :sqlite
 

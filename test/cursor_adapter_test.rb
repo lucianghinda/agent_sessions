@@ -351,11 +351,54 @@ class CursorIdeAdapterTest < Minitest::Test
     end
   end
 
-  def test_platform_selection_covers_the_three_declared_layouts
-    klass = Agent::Sessions::Adapters::Base
-    assert_equal :macos, klass.platform_for("x86_64-darwin24")
-    assert_equal :windows, klass.platform_for("x64-mingw-ucrt")
-    assert_equal :linux, klass.platform_for("x86_64-linux")
+  def test_cursor_ide_uses_xdg_config_home_on_linux
+    with_home do |home, env|
+      env = env.merge("XDG_CONFIG_HOME" => File.join(home, ".config-override"))
+      with_default_os(:linux) do
+        store = Agent::Sessions.locate(:cursor_ide, env: env)
+        assert_equal File.join(home, ".config-override", "Cursor", "User", "globalStorage", "state.vscdb"),
+                     store.effective.path
+      end
+    end
+  end
+
+  def test_cursor_ide_blank_xdg_config_home_falls_back_to_home_config
+    with_home do |home, env|
+      with_default_os(:linux) do
+        store = Agent::Sessions.locate(:cursor_ide, env: env.merge("XDG_CONFIG_HOME" => "   "))
+        assert_equal File.join(home, ".config", "Cursor", "User", "globalStorage", "state.vscdb"),
+                     store.effective.path
+      end
+    end
+  end
+
+  def test_cursor_ide_nonabsolute_xdg_config_home_falls_back_to_home_config
+    with_home do |home, env|
+      with_default_os(:linux) do
+        store = Agent::Sessions.locate(:cursor_ide, env: env.merge("XDG_CONFIG_HOME" => "relative/config"))
+        assert_equal File.join(home, ".config", "Cursor", "User", "globalStorage", "state.vscdb"),
+                     store.effective.path
+      end
+    end
+  end
+
+  def test_cursor_ide_uses_appdata_on_windows
+    with_home do |_home, _env|
+      env = { "HOME" => "C:/Users/dev", "APPDATA" => "C:/Users/dev/AppData/Roaming" }
+      with_default_os(:windows) do
+        store = Agent::Sessions.locate(:cursor_ide, env: env)
+        assert_equal "C:/Users/dev/AppData/Roaming/Cursor/User/globalStorage/state.vscdb", store.effective.path
+      end
+    end
+  end
+
+  def test_cursor_ide_resolver_rejects_unsupported_os
+    entries = {
+      cursor_ide: { label: "Cursor IDE", env: nil, verified_on: nil, paths: { macos: "~/Library/Application Support/Cursor" } }
+    }
+    assert_raises(ArgumentError) do
+      Agent::Homedir::Resolver.new(env: { "HOME" => "/h" }, home: "/h", os: :plan9, entries: entries)
+    end
   end
 
   private
@@ -373,11 +416,15 @@ class CursorIdeAdapterTest < Minitest::Test
   end
 
   def globalstorage_segments
-    case Agent::Sessions::Adapters::Base.platform_for
+    case Agent::Homedir::Resolver.default_os
     when :macos then ["Library", "Application Support", "Cursor", "User", "globalStorage"]
     when :windows then ["AppData", "Roaming", "Cursor", "User", "globalStorage"]
     else [".config", "Cursor", "User", "globalStorage"]
     end
+  end
+
+  def with_default_os(os, &block)
+    Agent::Homedir::Resolver.stub(:default_os, os, &block)
   end
 
   def build_db(home, rows)

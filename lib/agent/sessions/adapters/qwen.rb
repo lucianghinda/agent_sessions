@@ -21,7 +21,7 @@ module Agent
 
             def self.reader_class = Readers::Qwen
 
-            base_dir default: "~/.qwen"
+            homedir :qwen
 
             store :chats, dir: "projects", glob: "*/chats/*.jsonl", format: :jsonl
             store :settings, path: "settings.json", format: :json, optional: true

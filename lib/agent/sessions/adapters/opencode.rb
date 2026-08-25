@@ -12,7 +12,7 @@ module Agent
 
             def self.reader_class = Readers::Opencode
 
-            base_dir default: "~/.local/share/opencode", env: "XDG_DATA_HOME", env_join: "opencode"
+            homedir :opencode, report_env: ["XDG_DATA_HOME"]
 
             store :database, path: "opencode.db", format: :sqlite
             store :legacy, dir: "storage", format: :json, optional: true
@@ -20,36 +20,15 @@ module Agent
             warning "pre-v1.2.0 storage/ tree may remain on disk after migration; " \
                     "counting it alongside opencode.db double-counts sessions"
 
-            # Where opencode keeps its data besides the declared default, in the
-            # order they are tried. Taken from tokentelemetry's probe of the same
-            # store (resources/tokentelemetry, _opencode_db_candidates) and NOT
-            # verified here beyond the first: this machine has only
-            # ~/.local/share/opencode. Before this list, a macOS user whose store
-            # sits under Application Support got an empty result from an agent they
-            # had used — the same class of bug the Cursor IDE adapter had.
-            #
-            # OPENCODE_DATA_DIR is the store's own variable and so outranks
-            # XDG_DATA_HOME, which base_dir already honours; both are checked before
-            # any hardcoded path, and a candidate only wins if it actually holds a
-            # database, so an empty directory cannot shadow a real store.
-            def self.data_dir_candidates(env, home)
-              [
-                env["OPENCODE_DATA_DIR"],
-                (env["XDG_DATA_HOME"] && File.join(env["XDG_DATA_HOME"], "opencode")),
-                File.join(home, ".local", "share", "opencode"),
-                (File.join(home, "Library", "Application Support", "opencode") if platform_for == :macos),
-                (env["APPDATA"] && File.join(env["APPDATA"], "opencode")),
-                (env["LOCALAPPDATA"] && File.join(env["LOCALAPPDATA"], "opencode"))
-              ].compact
-            end
-
             # The declared default stands unless another candidate actually holds a
             # database. Falling back to it rather than to the first candidate that
             # merely exists keeps `where` printing a concrete, conventional path on
             # a machine with no opencode at all.
             def base_dir
-              @base_dir ||= self.class.data_dir_candidates(@env, home)
-                                .find { |dir| Dir.glob(File.join(escape_glob(dir), DATABASE_GLOB)).any? } || super
+              @base_dir ||= begin
+                probes = ([resolver.home(:opencode)] + resolver.candidates(:opencode)).map(&:to_s).uniq
+                probes.find { |dir| Dir.glob(File.join(escape_glob(dir), DATABASE_GLOB)).any? } || resolver.home(:opencode).to_s
+              end
             end
 
             # opencode names its database per release channel — opencode.db,

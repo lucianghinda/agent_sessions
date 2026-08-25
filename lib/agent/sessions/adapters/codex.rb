@@ -10,7 +10,7 @@ module Agent
             verified_on "2026-07-21"
             fidelity :full
 
-            base_dir default: "~/.codex", env: "CODEX_HOME"
+            homedir :codex
 
             store :sessions, dir: "sessions", glob: "*/*/*/rollout-*.jsonl", format: :jsonl
             # Flat, unlike sessions/YYYY/MM/DD/ — the one real archived file found

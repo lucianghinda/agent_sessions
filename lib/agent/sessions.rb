@@ -5,6 +5,7 @@ require "date"
 require "uri"
 require "time"
 
+require "agent_homedir"
 require "zeitwerk"
 
 module Agent

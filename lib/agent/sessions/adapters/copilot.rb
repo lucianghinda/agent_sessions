@@ -22,7 +22,7 @@ module Agent
 
             def self.reader_class = Readers::Copilot
 
-            base_dir default: "~/.copilot"
+            homedir :github_copilot_cli
 
             store :database, path: "session-store.db", format: :sqlite
             store :session_state, dir: "session-state", format: :json, optional: true

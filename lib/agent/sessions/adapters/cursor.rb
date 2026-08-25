@@ -13,7 +13,7 @@ module Agent
             # No env override. XDG_CONFIG_HOME was assumed here and disproved on
             # 2026-08-04: with it set, Cursor still stored under ~/.cursor, so honouring
             # it reported an installed agent as missing. Verified on macOS only.
-            base_dir default: "~/.cursor"
+            homedir :cursor
 
             store :chats, dir: "chats", glob: "*/*/store.db", format: :sqlite
             store :acp_sessions, dir: "acp-sessions", format: :json, optional: true

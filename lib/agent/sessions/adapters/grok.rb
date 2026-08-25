@@ -29,7 +29,7 @@ module Agent
 
             def self.reader_class = Readers::Grok
 
-            base_dir default: "~/.grok"
+            homedir :grok_build
 
             store :sessions, dir: "sessions", glob: "*/*/summary.json", format: :json
             store :unified_log, path: File.join("logs", "unified.jsonl"), format: :jsonl, optional: true

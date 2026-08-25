@@ -10,6 +10,12 @@ module AgentSessions
 
       fidelity :full
 
+      # The reader shares this adapter's provisional standing: written against
+      # tokentelemetry's parser of the same format, since this machine's pi
+      # store holds no session files to observe. Its own header comment says
+      # what remains unverified.
+      def self.reader_class = Readers::Pi
+
       base_dir default: "~/.pi/agent", env: "PI_CODING_AGENT_DIR"
 
       store :sessions, dir: "sessions", glob: "--*--/*.jsonl", format: :jsonl,

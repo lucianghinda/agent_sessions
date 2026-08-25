@@ -58,6 +58,47 @@ module AgentSessions
       # And where an output keeps its result.
       CALL_OUTPUTS = %w[output tools].freeze
 
+      # Session totals. Codex writes no usage on its messages; it writes
+      # token_count event records whose info.total_token_usage is a RUNNING
+      # TOTAL — verified against a real rollout on this machine (2026-08-24):
+      # consecutive records report total 33,751 then 69,135 while their
+      # last_token_usage differ, so the last record is the session and summing
+      # would multiply-count every earlier turn.
+      #
+      # Two normalizations, both from that same file:
+      #
+      #   input_tokens INCLUDES cached_input_tokens (33,431 including 19,200
+      #   in the sample) — the opposite of Claude's disjoint spelling — so the
+      #   cached share is subtracted to make Usage#input mean one thing across
+      #   agents. Clamped at zero: a count that went negative would mean the
+      #   two fields disagree, and a wrong zero beats a negative token count.
+      #
+      #   cache_write_input_tokens maps to cache_creation. total_tokens is
+      #   deliberately not mapped anywhere: it restates the other fields, and
+      #   any bucket it landed in would be double-counted by a caller summing
+      #   buckets.
+      def usage
+        info = nil
+        each_record do |record, _line_number|
+          next unless record["type"] == "event_msg"
+
+          candidate = record.dig("payload", "info", "total_token_usage")
+          info = candidate if record.dig("payload", "type") == "token_count" && candidate.is_a?(Hash)
+        end
+        return nil unless info
+
+        input = count_from(info["input_tokens"])
+        cached = count_from(info["cached_input_tokens"])
+        mapped = Usage.new(input: input && cached ? [input - cached, 0].max : input,
+                           output: count_from(info["output_tokens"]),
+                           cache_read: cached,
+                           cache_creation: count_from(info["cache_write_input_tokens"]),
+                           reasoning: count_from(info["reasoning_output_tokens"]))
+        # Same rule as Claude's usage_from: a token_count record whose every
+        # field failed the count check answers nil, not an all-nil Usage.
+        mapped.to_h.each_value.any? ? mapped : nil
+      end
+
       private
 
       def message_for(record, line_number)

@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "test_helper"
+require "sqlite3"
 
 class CursorAdapterTest < Minitest::Test
   include AdapterConformance
@@ -238,22 +239,34 @@ class CursorAdapterTest < Minitest::Test
   end
 end
 
+# Repointed 2026-08-24 at the store the 0.2 adapter's warning named, now that
+# it has been opened: ~/Library/Application Support/Cursor/User/globalStorage/
+# state.vscdb, table cursorDiskKV, keys composerData:<uuid> — 6 real rows on
+# the machine this was written on, each carrying composerId, createdAt (epoch
+# millis) and an EMPTY conversation array. The old declaration
+# (~/.cursor/projects/*/agent-transcripts/*) did not exist there at all.
 class CursorIdeAdapterTest < Minitest::Test
   include AdapterConformance
 
   def adapter_class = AgentSessions::Adapters::CursorIde
 
   def build_fixture(home)
-    touch(home, ".cursor", "projects", "my-app", "agent-transcripts", "t1")
+    build_db(home, [[composer_key(SESSION), composer_value(CREATED_MS)]])
   end
 
-  def expected_default_path(home) = File.join(home, ".cursor", "projects")
+  # The macOS layout, which is the verified one and the platform CI and this
+  # machine both run. expected_default_path follows the same branch rather
+  # than hardcoding it, so the suite is honest on a Linux runner too.
+  def expected_default_path(home)
+    File.join(home, *globalstorage_segments, "state.vscdb")
+  end
 
   def override_env = nil
 
-  def expected_session_id = "t1"
-  # The projects/<name> segment is a bare name, not a path, and the design doc
-  # gives no rule to expand it. nil is the honest answer.
+  def expected_session_id = SESSION
+  # Composer records name no project: context.fileSelections holds paths of
+  # ATTACHED files (an unrelated settings file, in the real data), and a
+  # workspace root inferred from one attachment would be a guess.
   def expected_project_path = nil
 
   def test_ide_is_a_separate_agent_from_the_cli
@@ -267,22 +280,114 @@ class CursorIdeAdapterTest < Minitest::Test
     end
   end
 
-  def test_ide_fidelity_defaults_to_unsupported
-    assert_equal :unsupported, AgentSessions::Adapters::CursorIde.fidelity_value
+  # :metadata, not :unsupported — the adapter can now say a session exists and
+  # when it started. It stays below :messages because every real record here
+  # carried an empty conversation, so the turn format is still unseen.
+  def test_ide_reports_metadata_fidelity
+    assert_equal :metadata, AgentSessions::Adapters::CursorIde.fidelity_value
   end
 
-  # Gated like Amp's multi-root warning (test_multi_root_warning_appears_only_once_the_store_exists):
-  # a "here is what breaks, please act on it" report reaches only someone who
-  # can act on it, so it must stay silent for a user with no ~/.cursor/projects
-  # at all, and appear once one exists — which is also the machine-observed
-  # case design doc 8.3 records: the declared store is a real bug, not an
-  # empty result, and this is where a user actually adopting the gem finds
-  # out about it.
-  def test_warns_about_the_real_ide_session_location_once_the_declared_store_exists
-    with_home do |home, env|
-      refute(AgentSessions.locate(:cursor_ide, env: env).warnings.any? { |w| w.include?("globalStorage") })
-      build_fixture(home)
-      assert(AgentSessions.locate(:cursor_ide, env: env).warnings.any? { |w| w.include?("globalStorage") })
+  def test_warns_that_session_content_is_not_read
+    with_home do |_home, env|
+      store = AgentSessions.locate(:cursor_ide, env: env)
+      assert(store.warnings.any? { |w| w.include?("conversation") })
     end
+  end
+
+  def test_the_store_is_a_single_sqlite_file
+    with_home do |_home, env|
+      store = AgentSessions.locate(:cursor_ide, env: env)
+      assert_equal :sqlite, store.format
+      assert_predicate store.effective, :single_file
+    end
+  end
+
+  def test_started_at_comes_from_the_records_created_at
+    with_home do |home, env|
+      build_fixture(home)
+      session = AgentSessions.sessions(:cursor_ide, env: env).first
+      assert_equal Time.at(CREATED_MS / 1000.0), session.started_at
+      assert_equal session.started_at, session.updated_at
+      assert_nil session.bytes, "a row in a shared database has no file size of its own"
+    end
+  end
+
+  # updated_at is a cross-adapter invariant: never nil, because `since` and
+  # every sort rely on it. A record with no usable createdAt falls back to the
+  # database file's own mtime rather than returning nil.
+  def test_a_record_without_a_usable_created_at_still_has_an_updated_at
+    with_home do |home, env|
+      build_db(home, [[composer_key(SESSION), JSON.generate({ composerId: SESSION })]])
+      session = AgentSessions.sessions(:cursor_ide, env: env).first
+      assert_nil session.started_at
+      refute_nil session.updated_at
+    end
+  end
+
+  def test_a_record_whose_value_is_not_json_is_still_a_session
+    with_home do |home, env|
+      build_db(home, [[composer_key(SESSION), "not json"]])
+      session = AgentSessions.sessions(:cursor_ide, env: env).first
+      assert_equal SESSION, session.id
+      assert_nil session.started_at
+    end
+  end
+
+  # cursorDiskKV also holds inlineDiffsData rows (1 of 7 in the real store).
+  # Only composerData rows are sessions.
+  def test_other_key_prefixes_in_the_same_table_are_not_sessions
+    with_home do |home, env|
+      build_db(home, [[composer_key(SESSION), composer_value(CREATED_MS)],
+                      ["inlineDiffsData:x", JSON.generate({ createdAt: CREATED_MS })]])
+      assert_equal [SESSION], AgentSessions.sessions(:cursor_ide, env: env).map(&:id).force
+    end
+  end
+
+  def test_projects_are_empty_rather_than_guessed_from_attached_files
+    with_home do |home, env|
+      build_fixture(home)
+      assert_empty AgentSessions.projects(:cursor_ide, env: env)
+      assert_empty AgentSessions.for_project("/Users/you/app", env: env, agents: [:cursor_ide]).to_a
+    end
+  end
+
+  def test_platform_selection_covers_the_three_declared_layouts
+    klass = AgentSessions::Adapters::Base
+    assert_equal :macos, klass.platform_for("x86_64-darwin24")
+    assert_equal :windows, klass.platform_for("x64-mingw-ucrt")
+    assert_equal :linux, klass.platform_for("x86_64-linux")
+  end
+
+  private
+
+  SESSION = "6c65ff9a-02b9-47de-8c48-8e60d682b689"
+  CREATED_MS = 1_776_161_422_165
+
+  def composer_key(id) = "composerData:#{id}"
+
+  # Shaped as the real records are, trimmed to the keys this adapter reads
+  # plus the empty conversation that is the reason it stops at :metadata.
+  def composer_value(created_ms)
+    JSON.generate({ composerId: SESSION, createdAt: created_ms, conversation: [],
+                    status: "none", unifiedMode: "edit", tokenCount: 1993 })
+  end
+
+  def globalstorage_segments
+    case AgentSessions::Adapters::Base.platform_for
+    when :macos then ["Library", "Application Support", "Cursor", "User", "globalStorage"]
+    when :windows then ["AppData", "Roaming", "Cursor", "User", "globalStorage"]
+    else [".config", "Cursor", "User", "globalStorage"]
+    end
+  end
+
+  def build_db(home, rows)
+    path = File.join(home, *globalstorage_segments, "state.vscdb")
+    FileUtils.mkdir_p(File.dirname(path))
+    db = SQLite3::Database.new(path)
+    db.execute("CREATE TABLE cursorDiskKV (key TEXT PRIMARY KEY, value BLOB)")
+    rows.each { |row| db.execute("INSERT INTO cursorDiskKV VALUES (?, ?)", row) }
+    path
+  ensure
+    db&.close
   end
 end

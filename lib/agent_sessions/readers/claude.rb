@@ -15,9 +15,16 @@ module AgentSessions
       # State, not conversation, and together 11,000+ of the records written.
       # Skipped in silence: warning about a record deliberately classified would
       # teach a caller that warnings are noise.
+      #
+      # atis-latch and bridge-session postdate the corpus above — found by
+      # running this reader over a live 2026-08-24 transcript and reading its
+      # own warnings (23 and 17 records), the same way Codex's tool list grew.
+      # Both are session plumbing: a latch marker, and the record tying a
+      # local transcript to its cloud session id (bridgeSessionId, owner
+      # uuids). Neither is a turn anyone took.
       NON_MESSAGE_TYPES = %w[ai-title mode permission-mode agent-name last-prompt
                              file-history-snapshot file-history-delta queue-operation
-                             pr-link summary].freeze
+                             pr-link summary atis-latch bridge-session].freeze
 
       # Context the model saw, but not a turn: `system` is turn_duration,
       # stop_hook_summary, away_summary, local_command; `attachment` is hook
@@ -70,6 +77,31 @@ module AgentSessions
           child = child_session(File.join(sidecar_root, "subagents", name))
           child && self.class.new(child, resolve_spills: @resolve_spills, include_events: include_events)
         end
+      end
+
+      # Session totals, summed over assistant records but deduplicated by
+      # message.id first — and the dedup is most of the number. One API
+      # response streams into one record PER CONTENT BLOCK, each carrying the
+      # same message.id and the same usage: in one real transcript on this
+      # machine (2026-08-24), 260 assistant records share 124 message ids, 94
+      # of which repeat with byte-identical usage. A naive sum reports roughly
+      # double what Anthropic billed. An id-less record (not observed, but
+      # rule 2 says formats drift) is counted rather than dropped: overcounting
+      # a novelty beats silently ignoring it.
+      def usage
+        seen = {}
+        total = nil
+        each_record do |record, _line_number|
+          usage = usage_from(record)
+          next unless usage
+
+          id = record.dig("message", "id")
+          next if id && seen[id]
+
+          seen[id] = true if id
+          total = total ? total + usage : usage
+        end
+        total
       end
 
       private
@@ -136,7 +168,29 @@ module AgentSessions
       end
 
       def build(record, role, parts)
-        Message.new(role: role, at: time_from(record["timestamp"]), parts: parts, raw: record)
+        model = record.dig("message", "model")
+        Message.new(role: role, at: time_from(record["timestamp"]), parts: parts, raw: record,
+                    usage: usage_from(record), model: model.is_a?(String) ? model : nil)
+      end
+
+      # message.usage sits on assistant records; user and event records dig to
+      # nil and carry none. Key names verified against a real transcript on
+      # this machine (2026-08-24): input_tokens is already DISJOINT from the
+      # two cache counts (input_tokens 2 beside cache_read_input_tokens
+      # 24,332 in the sample — Anthropic semantics, no subtraction needed),
+      # and thinking tokens hide one level down in output_tokens_details.
+      # A usage hash whose every mapped key fails count_from yields nil, not
+      # an all-nil Usage: an empty answer should look absent, not present.
+      def usage_from(record)
+        usage = record.dig("message", "usage")
+        return nil unless usage.is_a?(Hash)
+
+        mapped = Usage.new(input: count_from(usage["input_tokens"]),
+                           output: count_from(usage["output_tokens"]),
+                           cache_read: count_from(usage["cache_read_input_tokens"]),
+                           cache_creation: count_from(usage["cache_creation_input_tokens"]),
+                           reasoning: count_from(usage.dig("output_tokens_details", "thinking_tokens")))
+        mapped.to_h.each_value.any? ? mapped : nil
       end
 
       def stringify(value)

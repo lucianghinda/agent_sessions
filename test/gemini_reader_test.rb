@@ -155,6 +155,6 @@ class GeminiReaderTest < Minitest::Test
   end
 
   def read_session(env, **options)
-    AgentSessions.read(AgentSessions.sessions(:gemini, env: env).first, **options)
+    Agent::Sessions.read(Agent::Sessions.sessions(:gemini, env: env).first, **options)
   end
 end

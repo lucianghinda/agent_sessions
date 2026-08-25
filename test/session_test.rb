@@ -15,7 +15,7 @@ class SessionTest < Minitest::Test
       fidelity: :full
     }.merge(overrides)
     args[:project_path] = project_path unless project_path == :omit
-    AgentSessions::Session.new(**args, &resolver)
+    Agent::Sessions::Session.new(**args, &resolver)
   end
 
   def test_exposes_its_fields

@@ -85,47 +85,71 @@ class AdapterBaseTest < Minitest::Test
   end
 
   def test_dsl_macros_are_private
-    refute_respond_to AgentSessions::Adapters::Base, :store
-    refute_respond_to AgentSessions::Adapters::Base, :base_dir
+    refute_respond_to Agent::Sessions::Adapters::Base, :store
+    refute_respond_to Agent::Sessions::Adapters::Base, :homedir
   end
 
-  def test_tilde_user_paths_stay_literal
+  def test_tilde_user_paths_join_home
     store = FakeAdapter.new(env: { "HOME" => "/h", "FAKE_HOME" => "~root" }).locate
-    assert_equal "~root/sessions", store.effective.path
+    assert_equal "/h/~root/sessions", store.effective.path
+  end
+
+  def test_relative_base_env_override_joins_home
+    store = FakeAdapter.new(env: { "HOME" => "/h", "FAKE_HOME" => "relative/fake" }).locate
+    assert_equal "/h/relative/fake/sessions", store.effective.path
   end
 
   def test_store_requires_exactly_one_of_dir_or_path
     missing = assert_raises(ArgumentError) do
-      Class.new(AgentSessions::Adapters::Base) { store :bad, format: :jsonl }
+      Class.new(Agent::Sessions::Adapters::Base) { store :bad, format: :jsonl }
     end
     assert_includes missing.message, "dir:"
 
     assert_raises(ArgumentError) do
-      Class.new(AgentSessions::Adapters::Base) { store :bad, dir: "d", path: "p.jsonl", format: :jsonl }
+      Class.new(Agent::Sessions::Adapters::Base) { store :bad, dir: "d", path: "p.jsonl", format: :jsonl }
     end
   end
 
   def test_adapter_without_stores_names_what_is_missing
-    adapter = Class.new(AgentSessions::Adapters::Base) do
+    adapter = Class.new(Agent::Sessions::Adapters::Base) do
       agent :bare
-      base_dir default: "~/.bare"
+      homedir :bare_homedir, entry: { paths: "~/.bare" }
     end
-    error = assert_raises(AgentSessions::Error) { adapter.new(env: { "HOME" => "/h" }).locate }
+    error = assert_raises(Agent::Sessions::Error) { adapter.new(env: { "HOME" => "/h" }).locate }
     assert_includes error.message, "store"
   end
 
-  def test_adapter_without_base_dir_names_what_is_missing
-    adapter = Class.new(AgentSessions::Adapters::Base) do
+  def test_adapter_without_homedir_names_what_is_missing
+    adapter = Class.new(Agent::Sessions::Adapters::Base) do
       agent :bare
       store :sessions, dir: "s", format: :jsonl
     end
-    error = assert_raises(AgentSessions::Error) { adapter.new(env: { "HOME" => "/h" }).locate }
-    assert_includes error.message, "base_dir"
+    error = assert_raises(Agent::Sessions::Error) { adapter.new(env: { "HOME" => "/h" }).locate }
+    assert_includes error.message, "declares no homedir"
+  end
+
+  def test_second_level_subclass_without_its_own_homedir_raises_the_missing_homedir_error
+    parent = Class.new(Agent::Sessions::Adapters::Base) do
+      agent :parent
+      homedir :parent_homedir, entry: { paths: "~/.parent" }
+    end
+    child = Class.new(parent) do
+      agent :child
+      store :sessions, dir: "s", format: :jsonl
+    end
+
+    error = assert_raises(Agent::Sessions::Error) { child.new(env: { "HOME" => "/h" }).locate }
+    assert_includes error.message, "declares no homedir"
   end
 
   def test_empty_home_falls_back_like_an_absent_one
     with_default = FakeAdapter.new(env: {}).locate.effective.path
     assert_equal with_default, FakeAdapter.new(env: { "HOME" => "" }).locate.effective.path
+  end
+
+  def test_whitespace_only_home_falls_back_like_an_absent_one
+    with_default = FakeAdapter.new(env: {}).locate.effective.path
+    assert_equal with_default, FakeAdapter.new(env: { "HOME" => "   " }).locate.effective.path
   end
 
   def test_sessions_is_a_lazy_enumerator
@@ -158,13 +182,13 @@ class AdapterBaseTest < Minitest::Test
   end
 
   def test_fidelity_defaults_to_unsupported_when_undeclared
-    adapter = Class.new(AgentSessions::Adapters::Base) { agent :bare }
+    adapter = Class.new(Agent::Sessions::Adapters::Base) { agent :bare }
     assert_equal :unsupported, adapter.fidelity_value
   end
 
   def test_fidelity_rejects_unknown_values
     error = assert_raises(ArgumentError) do
-      Class.new(AgentSessions::Adapters::Base) { fidelity :excellent }
+      Class.new(Agent::Sessions::Adapters::Base) { fidelity :excellent }
     end
     assert_includes error.message, "excellent"
   end
@@ -174,12 +198,12 @@ class AdapterBaseTest < Minitest::Test
   # touching disk, so this adapter's every session hits the fallback, and
   # still costs zero content reads.
   def test_sessions_for_project_uses_the_encoded_dir_when_the_adapter_has_a_rule
-    encoding = Class.new(AgentSessions::Adapters::Base) do
+    encoding = Class.new(Agent::Sessions::Adapters::Base) do
       agent :cheap
       label "Cheap"
       documented true
       verified_on "2026-07-01"
-      base_dir default: "~/.cheap"
+      homedir :cheap_homedir, entry: { paths: "~/.cheap" }
       store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
 
       def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
@@ -204,9 +228,9 @@ class AdapterBaseTest < Minitest::Test
   # one never resumed and still recording the OLD cwd): the stale one must
   # be excluded on its own merits, not swept in by a directory-level verdict.
   def test_sessions_for_project_matches_by_recorded_cwd_regardless_of_directory_name
-    renamed = Class.new(AgentSessions::Adapters::Base) do
+    renamed = Class.new(Agent::Sessions::Adapters::Base) do
       agent :renamed
-      base_dir default: "~/.renamed"
+      homedir :renamed_homedir, entry: { paths: "~/.renamed" }
       store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
 
       def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
@@ -231,9 +255,9 @@ class AdapterBaseTest < Minitest::Test
   # crash and must not match everything — it falls back to comparing ITS OWN
   # directory's name, never worse than pre-fix behavior.
   def test_sessions_for_project_falls_back_to_name_when_a_sessions_own_cwd_is_unreadable
-    unreadable = Class.new(AgentSessions::Adapters::Base) do
+    unreadable = Class.new(Agent::Sessions::Adapters::Base) do
       agent :unreadable
-      base_dir default: "~/.unreadable"
+      homedir :unreadable_homedir, entry: { paths: "~/.unreadable" }
       store :sessions, dir: "sessions", glob: "*/*.jsonl", format: :jsonl
 
       def encode_project(dir) = dir.gsub(/[^a-zA-Z0-9]/, "-")
@@ -253,9 +277,9 @@ class AdapterBaseTest < Minitest::Test
   # comment) on the strength of staying lazy: a caller that stops early must
   # not pay for sessions it never asked about.
   def test_sessions_for_project_first_stops_early_without_reading_every_session
-    counting = Class.new(AgentSessions::Adapters::Base) do
+    counting = Class.new(Agent::Sessions::Adapters::Base) do
       agent :lazycount
-      base_dir default: "~/.lazycount"
+      homedir :lazycount_homedir, entry: { paths: "~/.lazycount" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       attr_reader :read_count
@@ -279,12 +303,12 @@ class AdapterBaseTest < Minitest::Test
   end
 
   def test_sessions_for_project_falls_back_to_reading_project_paths
-    reading = Class.new(AgentSessions::Adapters::Base) do
+    reading = Class.new(Agent::Sessions::Adapters::Base) do
       agent :slow
       label "Slow"
       documented true
       verified_on "2026-07-01"
-      base_dir default: "~/.slow"
+      homedir :slow_reading_homedir, entry: { paths: "~/.slow" }
       store :sessions, dir: "sessions", glob: "*.json", format: :json
 
       def project_path_for(path) = read_json(path)["cwd"]
@@ -299,12 +323,12 @@ class AdapterBaseTest < Minitest::Test
   end
 
   def test_project_paths_reads_distinct_recorded_projects
-    reading = Class.new(AgentSessions::Adapters::Base) do
+    reading = Class.new(Agent::Sessions::Adapters::Base) do
       agent :slow
       label "Slow"
       documented true
       verified_on "2026-07-01"
-      base_dir default: "~/.slow"
+      homedir :slow_distinct_homedir, entry: { paths: "~/.slow" }
       store :sessions, dir: "sessions", glob: "*.json", format: :json
 
       def project_path_for(path) = read_json(path)["cwd"]
@@ -321,9 +345,9 @@ class AdapterBaseTest < Minitest::Test
   # Glob order is not project order, and an adapter answering from a database
   # would impose its own. A stable order is what makes the output diffable.
   def test_project_paths_are_sorted_rather_than_left_in_glob_order
-    reading = Class.new(AgentSessions::Adapters::Base) do
+    reading = Class.new(Agent::Sessions::Adapters::Base) do
       agent :slow
-      base_dir default: "~/.slow"
+      homedir :slow_sorted_homedir, entry: { paths: "~/.slow" }
       store :sessions, dir: "sessions", glob: "*.json", format: :json
 
       def project_path_for(path) = read_json(path)["cwd"]
@@ -339,9 +363,9 @@ class AdapterBaseTest < Minitest::Test
   # cursor_ide already ships the counter-shape — projects/<name>/agent-transcripts/*
   # — where matching the immediate parent would find nothing, silently.
   def test_sessions_for_project_asks_the_adapter_which_directory_holds_the_encoding
-    nested = Class.new(AgentSessions::Adapters::Base) do
+    nested = Class.new(Agent::Sessions::Adapters::Base) do
       agent :nested
-      base_dir default: "~/.nested"
+      homedir :nested_homedir, entry: { paths: "~/.nested" }
       store :sessions, dir: "projects", glob: "*/transcripts/*.jsonl", format: :jsonl
 
       def encode_project(dir) = File.basename(dir)
@@ -360,9 +384,9 @@ class AdapterBaseTest < Minitest::Test
   # one syscall rather than two — and an adapter overriding both to read the same
   # metadata file sees one arity, not two.
   def test_time_hooks_receive_the_stat_the_enumerator_already_took
-    timed = Class.new(AgentSessions::Adapters::Base) do
+    timed = Class.new(Agent::Sessions::Adapters::Base) do
       agent :timed
-      base_dir default: "~/.timed"
+      homedir :timed_homedir, entry: { paths: "~/.timed" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def started_at_for(_path, stat) = stat.mtime - 60
@@ -393,12 +417,12 @@ class AdapterBaseTest < Minitest::Test
   # failing — a misdeclared adapter erasing sessions, which is exactly the silent
   # under-reporting this gem treats as its worst outcome.
   def test_a_raising_hook_surfaces_instead_of_erasing_the_session
-    broken = Class.new(AgentSessions::Adapters::Base) do
+    broken = Class.new(Agent::Sessions::Adapters::Base) do
       agent :broken
       label "Broken"
       documented true
       verified_on "2026-07-01"
-      base_dir default: "~/.broken"
+      homedir :broken_homedir, entry: { paths: "~/.broken" }
       store :sessions, dir: "sessions", glob: "*.jsonl", format: :jsonl
 
       def started_at_for(_path, _stat) = raise(Errno::EACCES, "metadata")
@@ -413,13 +437,13 @@ class AdapterBaseTest < Minitest::Test
   # Location#enumerable? exists so "no layout to enumerate" and "enumerated, found
   # none" stay apart. Returning [] here would make the first look like the second.
   def test_sessions_refuse_a_primary_store_with_no_known_layout
-    shapeless = Class.new(AgentSessions::Adapters::Base) do
+    shapeless = Class.new(Agent::Sessions::Adapters::Base) do
       agent :shapeless
-      base_dir default: "~/.shapeless"
+      homedir :shapeless_homedir, entry: { paths: "~/.shapeless" }
       store :sessions, dir: "sessions", format: :json # no glob: no way in
     end
 
-    error = assert_raises(AgentSessions::Error) { shapeless.new(env: { "HOME" => "/h" }).sessions }
+    error = assert_raises(Agent::Sessions::Error) { shapeless.new(env: { "HOME" => "/h" }).sessions }
     assert_includes error.message, "shapeless"
     assert_includes error.message, "sessions"
   end
@@ -464,7 +488,7 @@ class AdapterBaseTest < Minitest::Test
   # the blob is a single line and the record below it is found within any limit.
   def test_scan_jsonl_reads_an_over_long_line_in_bounded_chunks
     with_home do |home|
-      blob = "x" * ((AgentSessions::Adapters::Base::MAX_LINE_BYTES * 2) + 100)
+      blob = "x" * ((Agent::Sessions::Adapters::Base::MAX_LINE_BYTES * 2) + 100)
       path = write(%({"junk":"#{blob}"}\n{"cwd":"/p"}\n), home, "s.jsonl")
       assert_nil scan(path, "cwd", limit: 2)
       assert_equal "/p", scan(path, "cwd")["cwd"]
@@ -512,7 +536,109 @@ class AdapterBaseTest < Minitest::Test
     end
   end
 
+  def test_resolver_is_built_per_adapter_instance_with_its_own_env
+    original_default_os = Agent::Homedir::Resolver.default_os
+    resolver_class = Class.new do
+      class << self
+        attr_accessor :instances
+      end
+      self.instances = []
+
+      define_singleton_method(:default_os) { original_default_os }
+
+      attr_reader :env, :home_arg, :entries
+
+      def initialize(env:, home:, os: self.class.default_os, entries: nil)
+        @env = env
+        @home_arg = home
+        @entries = entries
+        self.class.instances << self
+      end
+
+      def home(name)
+        Pathname(File.join(@home_arg, @env.fetch("TOKEN"), name.to_s))
+      end
+
+      def [](name)
+        Agent::Homedir::Entry.new(
+          name: name.to_sym,
+          label: name.to_s,
+          env_override: "FAKE_HOME",
+          verified_on: nil,
+          resolver: self
+        )
+      end
+    end
+
+    with_stubbed_resolver(resolver_class) do
+      first = FakeAdapter.new(env: { "HOME" => "/home-one", "TOKEN" => "one" }).locate.effective.path
+      second = FakeAdapter.new(env: { "HOME" => "/home-two", "TOKEN" => "two" }).locate.effective.path
+
+      assert_equal "/home-one/one/fake/sessions", first
+      assert_equal "/home-two/two/fake/sessions", second
+    end
+
+    assert_equal 2, resolver_class.instances.size
+    assert_equal({ "HOME" => "/home-one", "TOKEN" => "one" }, resolver_class.instances.first.env)
+    assert_equal({ "HOME" => "/home-two", "TOKEN" => "two" }, resolver_class.instances.last.env)
+    assert_equal({ fake: { label: "Fake Agent", env: "FAKE_HOME", verified_on: nil, paths: "~/.fake" } },
+                 resolver_class.instances.first.entries)
+  end
+
+  def test_locate_does_not_use_agent_homedir_default_facade
+    Agent::Homedir.stub(:default_resolver, -> { flunk "expected adapter to build its own resolver" }) do
+      assert_equal "/h/.fake/sessions", FakeAdapter.new(env: { "HOME" => "/h" }).locate.effective.path
+    end
+  end
+
+  def test_base_dir_only_asks_the_resolver_for_home_once
+    original_default_os = Agent::Homedir::Resolver.default_os
+    resolver_class = Class.new do
+      class << self
+        attr_accessor :home_calls
+      end
+      self.home_calls = 0
+
+      define_singleton_method(:default_os) { original_default_os }
+
+      def initialize(env:, home:, os: self.class.default_os, entries: nil)
+      end
+
+      def home(name)
+        self.class.home_calls += 1
+        Pathname("/memoized/#{name}")
+      end
+
+      def [](name)
+        Agent::Homedir::Entry.new(
+          name: name.to_sym,
+          label: name.to_s,
+          env_override: nil,
+          verified_on: nil,
+          resolver: self
+        )
+      end
+    end
+
+    with_stubbed_resolver(resolver_class) do
+      adapter = FakeAdapter.new(env: { "HOME" => "/h" })
+      2.times { adapter.send(:base_dir) }
+    end
+
+    assert_equal 1, resolver_class.home_calls
+  end
+
   private
+
+  def with_stubbed_resolver(resolver_class)
+    homedir = Agent::Homedir
+    original = homedir.send(:remove_const, :Resolver)
+    homedir.const_set(:Resolver, resolver_class)
+    yield
+  ensure
+    homedir.send(:remove_const, :Resolver)
+    homedir.const_set(:Resolver, original)
+  end
 
   # scan_jsonl_for_key is private — it is an adapter's tool, not a public API.
   def scan(path, key, **options, &block)

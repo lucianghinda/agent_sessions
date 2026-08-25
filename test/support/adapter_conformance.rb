@@ -10,7 +10,7 @@ module AdapterConformance
   include FixtureHelpers
 
   def test_conformance_is_registered
-    assert_equal adapter_class, AgentSessions.registry[adapter_class.agent_name]
+    assert_equal adapter_class, Agent::Sessions.registry[adapter_class.agent_name]
   end
 
   def test_conformance_declares_required_metadata
@@ -209,7 +209,7 @@ module AdapterConformance
   # base_started_at helper; an adapter test class may define its own
   # same-named private method to override this default if it needs to.
   def base_started_at(session)
-    AgentSessions::Adapters::Base
+    Agent::Sessions::Adapters::Base
       .instance_method(:started_at_for)
       .bind(adapter_class.new(env: {}))
       .call(session.path, File.stat(session.path))

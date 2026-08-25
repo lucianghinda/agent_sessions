@@ -5,7 +5,7 @@ require_relative "test_helper"
 class PiAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Pi
+  def adapter_class = Agent::Sessions::Adapters::Pi
 
   # Directory is the double-dash-wrapped encoded cwd; filename is
   # <timestamp>_<8-hex-id>.jsonl; a header line opens the file (pi publishes
@@ -49,18 +49,18 @@ class PiAdapterTest < Minitest::Test
   def unmatched_filename = "2026-07-14T09-12-03_ab12cd34 (conflicted copy).jsonl"
 
   def test_session_dir_env_overrides_the_store_directly
-    store = AgentSessions.locate(:pi, env: { "HOME" => "/h", "PI_CODING_AGENT_SESSION_DIR" => "/elsewhere" })
+    store = Agent::Sessions.locate(:pi, env: { "HOME" => "/h", "PI_CODING_AGENT_SESSION_DIR" => "/elsewhere" })
     assert_equal "/elsewhere", store.effective.path
   end
 
   def test_session_dir_env_beats_base_dir_env
     env = { "HOME" => "/h", "PI_CODING_AGENT_DIR" => "/custom/pi", "PI_CODING_AGENT_SESSION_DIR" => "/elsewhere" }
-    store = AgentSessions.locate(:pi, env: env)
+    store = Agent::Sessions.locate(:pi, env: env)
     assert_equal "/elsewhere", store.effective.path
   end
 
   def test_encode_project_wraps_the_dashed_cwd_in_double_dashes
-    adapter = AgentSessions::Adapters::Pi.new(env: { "HOME" => "/h" })
+    adapter = Agent::Sessions::Adapters::Pi.new(env: { "HOME" => "/h" })
     assert_equal "--Users-you-app--", adapter.encode_project("/Users/you/app")
   end
 
@@ -97,7 +97,7 @@ class PiAdapterTest < Minitest::Test
   }.freeze
 
   def test_encode_project_round_trips_the_nine_real_pi_directories
-    adapter = AgentSessions::Adapters::Pi.new(env: { "HOME" => "/h" })
+    adapter = Agent::Sessions::Adapters::Pi.new(env: { "HOME" => "/h" })
     REAL_PI_DIRECTORY_ENCODINGS.each do |cwd, expected|
       assert_equal expected, adapter.encode_project(cwd), "expected #{cwd.inspect} to round-trip"
     end
@@ -106,13 +106,13 @@ class PiAdapterTest < Minitest::Test
   def test_started_at_comes_from_the_filename
     with_home do |home, env|
       build_fixture(home)
-      session = AgentSessions::Adapters::Pi.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Pi.new(env: env).sessions.first
       assert_equal Time.new(2026, 7, 14, 9, 12, 3), session.started_at
     end
   end
 
   def test_fidelity_is_full
-    assert_equal :full, AgentSessions::Adapters::Pi.fidelity_value
+    assert_equal :full, Agent::Sessions::Adapters::Pi.fidelity_value
   end
 
   # The store is reported unverified only once it exists — an agent that was
@@ -120,14 +120,14 @@ class PiAdapterTest < Minitest::Test
   def test_unverified_warning_appears_once_the_store_exists
     with_home do |home, env|
       build_fixture(home)
-      store = AgentSessions.locate(:pi, env: env)
+      store = Agent::Sessions.locate(:pi, env: env)
       assert(store.warnings.any? { |w| w.include?("unverified") })
     end
   end
 
   def test_no_unverified_warning_when_pi_is_not_installed
     with_home do |_home, env|
-      store = AgentSessions.locate(:pi, env: env)
+      store = Agent::Sessions.locate(:pi, env: env)
       refute(store.warnings.any? { |w| w.include?("unverified") })
     end
   end
@@ -146,7 +146,7 @@ class PiAdapterTest < Minitest::Test
       target = JSON.generate({ version: 3, cwd: "/Users/you/app" })
       write("#{(filler + [target]).join("\n")}\n", home, ".pi", "agent", "sessions", "--Users-you-app--",
             "2026-07-14T09-12-03_00000001.jsonl")
-      session = AgentSessions::Adapters::Pi.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Pi.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end
@@ -160,7 +160,7 @@ class PiAdapterTest < Minitest::Test
       target = JSON.generate({ version: 3, cwd: "/Users/you/app" })
       write("#{(filler + [target]).join("\n")}\n", home, ".pi", "agent", "sessions", "--Users-you-app--",
             "2026-07-14T09-12-03_00000002.jsonl")
-      session = AgentSessions::Adapters::Pi.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Pi.new(env: env).sessions.first
       assert_nil session.project_path
     end
   end
@@ -175,7 +175,7 @@ class PiAdapterTest < Minitest::Test
                 "#{JSON.generate({ version: 3, cwd: "/Users/you/app" })}\n"
       write(content, home, ".pi", "agent", "sessions", "--Users-you-app--",
             "2026-07-14T09-12-03_00000003.jsonl")
-      session = AgentSessions::Adapters::Pi.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Pi.new(env: env).sessions.first
       assert_equal "/Users/you/app", session.project_path
     end
   end

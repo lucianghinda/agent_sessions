@@ -1,17 +1,17 @@
 # frozen_string_literal: true
 
-require_relative "lib/agent_sessions/version"
+require_relative "lib/agent/sessions/version"
 
 Gem::Specification.new do |spec|
   spec.name = "agent_sessions"
-  spec.version = AgentSessions::VERSION
+  spec.version = Agent::Sessions::VERSION
   spec.authors = ["Lucian Ghinda"]
   spec.email = ["dev@ghinda.com"]
 
-  spec.summary = "Locate and enumerate AI coding agent session logs"
-  spec.description = "Resolves where AI coding agents (Claude Code, Codex CLI, Cursor, Amp, opencode, pi) " \
-                     "store their session logs, enumerates sessions and maps them to projects, verifies " \
-                     "those paths against disk, and audits sync and backup exposure. Read-only by design."
+  spec.summary = "Locate, verify, and read AI coding agent session logs"
+  spec.description = "Supports 11 adapters for Claude Code, Codex CLI, Cursor CLI/IDE, Amp, opencode, pi, " \
+                     "Gemini CLI, GitHub Copilot CLI, Qwen Code, and Grok Build; reads messages for nine " \
+                     "agents, verifies store paths, maps sessions to projects, and audits sync exposure."
   spec.homepage = "https://github.com/lucianghinda/agent_sessions"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
@@ -24,4 +24,7 @@ Gem::Specification.new do |spec|
   spec.bindir = "exe"
   spec.executables = ["agent-sessions"]
   spec.require_paths = ["lib"]
+
+  spec.add_dependency "agent_homedir", "~> 0.3"
+  spec.add_dependency "zeitwerk", "~> 2.8"
 end

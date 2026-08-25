@@ -6,7 +6,7 @@ require "sqlite3"
 class CursorAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::Cursor
+  def adapter_class = Agent::Sessions::Adapters::Cursor
 
   # store.db content is an undocumented blob (design doc 8.3) — Layer 2 never
   # opens it. The sibling meta.json carries the metadata. Field names are from
@@ -27,20 +27,20 @@ class CursorAdapterTest < Minitest::Test
 
   def test_warns_that_chat_payloads_are_undecoded
     with_home do |_home, env|
-      store = AgentSessions.locate(:cursor, env: env)
+      store = Agent::Sessions.locate(:cursor, env: env)
       assert(store.warnings.any? { |w| w.include?("blob") })
     end
   end
 
   def test_xdg_config_home_does_not_move_cursor
-    store = AgentSessions.locate(:cursor, env: { "HOME" => "/h", "XDG_CONFIG_HOME" => "/xdg/config" })
+    store = Agent::Sessions.locate(:cursor, env: { "HOME" => "/h", "XDG_CONFIG_HOME" => "/xdg/config" })
     assert_equal "/h/.cursor/chats", store.effective.path
   end
 
   def test_timestamps_come_from_meta_json
     with_home do |home, env|
       build_fixture(home)
-      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Cursor.new(env: env).sessions.first
       assert_equal Time.at(1_752_484_323_000 / 1000.0), session.started_at
       assert_equal Time.at(1_752_490_000_000 / 1000.0), session.updated_at
     end
@@ -49,14 +49,14 @@ class CursorAdapterTest < Minitest::Test
   def test_missing_meta_json_falls_back_to_stat
     with_home do |home, env|
       db = write("", home, ".cursor", "chats", "chat-2", "u2", "store.db")
-      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.first
+      session = Agent::Sessions::Adapters::Cursor.new(env: env).sessions.first
       assert_equal File.mtime(db), session.updated_at
       assert_nil session.project_path
     end
   end
 
   def test_fidelity_is_metadata
-    assert_equal :metadata, AgentSessions::Adapters::Cursor.fidelity_value
+    assert_equal :metadata, Agent::Sessions::Adapters::Cursor.fidelity_value
   end
 
   # Gated like cursor_ide's warning about its real session location: a "here
@@ -65,9 +65,9 @@ class CursorAdapterTest < Minitest::Test
   # ~/.cursor/chats at all (this machine, today), present once chats exist.
   def test_warns_that_meta_json_field_names_are_unverified_once_chats_exist
     with_home do |home, env|
-      refute(AgentSessions.locate(:cursor, env: env).warnings.any? { |w| w.include?("createdAtMs") })
+      refute(Agent::Sessions.locate(:cursor, env: env).warnings.any? { |w| w.include?("createdAtMs") })
       build_fixture(home)
-      assert(AgentSessions.locate(:cursor, env: env).warnings.any? { |w| w.include?("createdAtMs") })
+      assert(Agent::Sessions.locate(:cursor, env: env).warnings.any? { |w| w.include?("createdAtMs") })
     end
   end
 
@@ -83,7 +83,7 @@ class CursorAdapterTest < Minitest::Test
     with_home do |home, env|
       write("", home, ".cursor", "chats", "chat-array", "u", "store.db")
       write(JSON.generate([1, 2, 3]), home, ".cursor", "chats", "chat-array", "u", "meta.json")
-      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-array/u" }
+      session = Agent::Sessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-array/u" }
       assert_nil session.project_path
     end
   end
@@ -92,7 +92,7 @@ class CursorAdapterTest < Minitest::Test
     with_home do |home, env|
       write("", home, ".cursor", "chats", "chat-int-cwd", "u", "store.db")
       write(JSON.generate({ cwd: 42 }), home, ".cursor", "chats", "chat-int-cwd", "u", "meta.json")
-      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-int-cwd/u" }
+      session = Agent::Sessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-int-cwd/u" }
       assert_nil session.project_path
     end
   end
@@ -124,7 +124,7 @@ class CursorAdapterTest < Minitest::Test
       # bytes on disk are the finite-looking text "1e400", and it is JSON.parse
       # — not this test file's own Ruby source — that overflows it to Infinity.
       write('{"createdAtMs": 1e400}', home, ".cursor", "chats", "chat-huge", "u", "meta.json")
-      session = silence_warnings { AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-huge/u" } }
+      session = silence_warnings { Agent::Sessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-huge/u" } }
       assert_equal base_started_at(session), session.started_at
       assert_equal File.mtime(db), session.updated_at
     end
@@ -139,7 +139,7 @@ class CursorAdapterTest < Minitest::Test
     with_home do |home, env|
       db = write("", home, ".cursor", "chats", "chat-bignum", "u", "store.db")
       write(JSON.generate({ createdAtMs: 10**400 }), home, ".cursor", "chats", "chat-bignum", "u", "meta.json")
-      session = silence_warnings { AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-bignum/u" } }
+      session = silence_warnings { Agent::Sessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-bignum/u" } }
       assert_equal base_started_at(session), session.started_at
       assert_equal File.mtime(db), session.updated_at
     end
@@ -155,7 +155,7 @@ class CursorAdapterTest < Minitest::Test
     with_home do |home, env|
       db = write("", home, ".cursor", "chats", "chat-str", "u", "store.db")
       write(JSON.generate({ createdAtMs: "not-a-number" }), home, ".cursor", "chats", "chat-str", "u", "meta.json")
-      session = AgentSessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-str/u" }
+      session = Agent::Sessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-str/u" }
       assert_equal base_started_at(session), session.started_at
       assert_equal File.mtime(db), session.updated_at
     end
@@ -184,7 +184,7 @@ class CursorAdapterTest < Minitest::Test
       loop_path = File.join(home, ".cursor", "chats", "chat-loop", "u", "meta.json")
       File.symlink(loop_path, loop_path)
 
-      sessions = AgentSessions::Adapters::Cursor.new(env: env).sessions.force
+      sessions = Agent::Sessions::Adapters::Cursor.new(env: env).sessions.force
       assert_equal 2, sessions.size, "expected the listing to survive a symlink-loop meta.json"
 
       looped = sessions.find { |s| s.id == "chat-loop/u" }
@@ -221,7 +221,7 @@ class CursorAdapterTest < Minitest::Test
   # hook makes (two directory segments), by calling the hook rather than
   # routing through the (structurally incapable of producing this) glob.
   def test_session_id_from_does_not_raise_for_a_shallow_path
-    adapter = AgentSessions::Adapters::Cursor.new(env: { "HOME" => "/h" })
+    adapter = Agent::Sessions::Adapters::Cursor.new(env: { "HOME" => "/h" })
     assert_equal "///", adapter.session_id_from("/store.db")
   end
 
@@ -248,7 +248,7 @@ end
 class CursorIdeAdapterTest < Minitest::Test
   include AdapterConformance
 
-  def adapter_class = AgentSessions::Adapters::CursorIde
+  def adapter_class = Agent::Sessions::Adapters::CursorIde
 
   def build_fixture(home)
     build_db(home, [[composer_key(SESSION), composer_value(CREATED_MS)]])
@@ -270,12 +270,12 @@ class CursorIdeAdapterTest < Minitest::Test
   def expected_project_path = nil
 
   def test_ide_is_a_separate_agent_from_the_cli
-    refute_equal AgentSessions.registry[:cursor], AgentSessions.registry[:cursor_ide]
+    refute_equal Agent::Sessions.registry[:cursor], Agent::Sessions.registry[:cursor_ide]
   end
 
   def test_warns_stores_do_not_sync
     with_home do |_home, env|
-      store = AgentSessions.locate(:cursor_ide, env: env)
+      store = Agent::Sessions.locate(:cursor_ide, env: env)
       assert(store.warnings.any? { |w| w.include?("sync") })
     end
   end
@@ -284,19 +284,19 @@ class CursorIdeAdapterTest < Minitest::Test
   # when it started. It stays below :messages because every real record here
   # carried an empty conversation, so the turn format is still unseen.
   def test_ide_reports_metadata_fidelity
-    assert_equal :metadata, AgentSessions::Adapters::CursorIde.fidelity_value
+    assert_equal :metadata, Agent::Sessions::Adapters::CursorIde.fidelity_value
   end
 
   def test_warns_that_session_content_is_not_read
     with_home do |_home, env|
-      store = AgentSessions.locate(:cursor_ide, env: env)
+      store = Agent::Sessions.locate(:cursor_ide, env: env)
       assert(store.warnings.any? { |w| w.include?("conversation") })
     end
   end
 
   def test_the_store_is_a_single_sqlite_file
     with_home do |_home, env|
-      store = AgentSessions.locate(:cursor_ide, env: env)
+      store = Agent::Sessions.locate(:cursor_ide, env: env)
       assert_equal :sqlite, store.format
       assert_predicate store.effective, :single_file
     end
@@ -305,7 +305,7 @@ class CursorIdeAdapterTest < Minitest::Test
   def test_started_at_comes_from_the_records_created_at
     with_home do |home, env|
       build_fixture(home)
-      session = AgentSessions.sessions(:cursor_ide, env: env).first
+      session = Agent::Sessions.sessions(:cursor_ide, env: env).first
       assert_equal Time.at(CREATED_MS / 1000.0), session.started_at
       assert_equal session.started_at, session.updated_at
       assert_nil session.bytes, "a row in a shared database has no file size of its own"
@@ -318,7 +318,7 @@ class CursorIdeAdapterTest < Minitest::Test
   def test_a_record_without_a_usable_created_at_still_has_an_updated_at
     with_home do |home, env|
       build_db(home, [[composer_key(SESSION), JSON.generate({ composerId: SESSION })]])
-      session = AgentSessions.sessions(:cursor_ide, env: env).first
+      session = Agent::Sessions.sessions(:cursor_ide, env: env).first
       assert_nil session.started_at
       refute_nil session.updated_at
     end
@@ -327,7 +327,7 @@ class CursorIdeAdapterTest < Minitest::Test
   def test_a_record_whose_value_is_not_json_is_still_a_session
     with_home do |home, env|
       build_db(home, [[composer_key(SESSION), "not json"]])
-      session = AgentSessions.sessions(:cursor_ide, env: env).first
+      session = Agent::Sessions.sessions(:cursor_ide, env: env).first
       assert_equal SESSION, session.id
       assert_nil session.started_at
     end
@@ -339,23 +339,66 @@ class CursorIdeAdapterTest < Minitest::Test
     with_home do |home, env|
       build_db(home, [[composer_key(SESSION), composer_value(CREATED_MS)],
                       ["inlineDiffsData:x", JSON.generate({ createdAt: CREATED_MS })]])
-      assert_equal [SESSION], AgentSessions.sessions(:cursor_ide, env: env).map(&:id).force
+      assert_equal [SESSION], Agent::Sessions.sessions(:cursor_ide, env: env).map(&:id).force
     end
   end
 
   def test_projects_are_empty_rather_than_guessed_from_attached_files
     with_home do |home, env|
       build_fixture(home)
-      assert_empty AgentSessions.projects(:cursor_ide, env: env)
-      assert_empty AgentSessions.for_project("/Users/you/app", env: env, agents: [:cursor_ide]).to_a
+      assert_empty Agent::Sessions.projects(:cursor_ide, env: env)
+      assert_empty Agent::Sessions.for_project("/Users/you/app", env: env, agents: [:cursor_ide]).to_a
     end
   end
 
-  def test_platform_selection_covers_the_three_declared_layouts
-    klass = AgentSessions::Adapters::Base
-    assert_equal :macos, klass.platform_for("x86_64-darwin24")
-    assert_equal :windows, klass.platform_for("x64-mingw-ucrt")
-    assert_equal :linux, klass.platform_for("x86_64-linux")
+  def test_cursor_ide_uses_xdg_config_home_on_linux
+    with_home do |home, env|
+      env = env.merge("XDG_CONFIG_HOME" => File.join(home, ".config-override"))
+      with_default_os(:linux) do
+        store = Agent::Sessions.locate(:cursor_ide, env: env)
+        assert_equal File.join(home, ".config-override", "Cursor", "User", "globalStorage", "state.vscdb"),
+                     store.effective.path
+      end
+    end
+  end
+
+  def test_cursor_ide_blank_xdg_config_home_falls_back_to_home_config
+    with_home do |home, env|
+      with_default_os(:linux) do
+        store = Agent::Sessions.locate(:cursor_ide, env: env.merge("XDG_CONFIG_HOME" => "   "))
+        assert_equal File.join(home, ".config", "Cursor", "User", "globalStorage", "state.vscdb"),
+                     store.effective.path
+      end
+    end
+  end
+
+  def test_cursor_ide_nonabsolute_xdg_config_home_falls_back_to_home_config
+    with_home do |home, env|
+      with_default_os(:linux) do
+        store = Agent::Sessions.locate(:cursor_ide, env: env.merge("XDG_CONFIG_HOME" => "relative/config"))
+        assert_equal File.join(home, ".config", "Cursor", "User", "globalStorage", "state.vscdb"),
+                     store.effective.path
+      end
+    end
+  end
+
+  def test_cursor_ide_uses_appdata_on_windows
+    with_home do |_home, _env|
+      env = { "HOME" => "C:/Users/dev", "APPDATA" => "C:/Users/dev/AppData/Roaming" }
+      with_default_os(:windows) do
+        store = Agent::Sessions.locate(:cursor_ide, env: env)
+        assert_equal "C:/Users/dev/AppData/Roaming/Cursor/User/globalStorage/state.vscdb", store.effective.path
+      end
+    end
+  end
+
+  def test_cursor_ide_resolver_rejects_unsupported_os
+    entries = {
+      cursor_ide: { label: "Cursor IDE", env: nil, verified_on: nil, paths: { macos: "~/Library/Application Support/Cursor" } }
+    }
+    assert_raises(ArgumentError) do
+      Agent::Homedir::Resolver.new(env: { "HOME" => "/h" }, home: "/h", os: :plan9, entries: entries)
+    end
   end
 
   private
@@ -373,11 +416,15 @@ class CursorIdeAdapterTest < Minitest::Test
   end
 
   def globalstorage_segments
-    case AgentSessions::Adapters::Base.platform_for
+    case Agent::Homedir::Resolver.default_os
     when :macos then ["Library", "Application Support", "Cursor", "User", "globalStorage"]
     when :windows then ["AppData", "Roaming", "Cursor", "User", "globalStorage"]
     else [".config", "Cursor", "User", "globalStorage"]
     end
+  end
+
+  def with_default_os(os, &block)
+    Agent::Homedir::Resolver.stub(:default_os, os, &block)
   end
 
   def build_db(home, rows)

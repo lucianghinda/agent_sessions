@@ -123,7 +123,7 @@ class AmpReaderTest < Minitest::Test
   # (0.2 follow-up 8) and this is the bound — refused and reported, never an
   # attempt that ends in NoMemoryError.
   def test_a_document_larger_than_the_cap_is_refused_and_reported
-    padding = "z" * (AgentSessions::Readers::Amp::MAX_DOCUMENT_BYTES + 1)
+    padding = "z" * (Agent::Sessions::Readers::Amp::MAX_DOCUMENT_BYTES + 1)
     with_raw_thread(JSON.generate({ messages: [turn("user", [text_part(padding)])] })) do |reader|
       assert_empty reader.messages
       assert(reader.warnings.any? { |w| w.include?("too large") })
@@ -162,7 +162,7 @@ class AmpReaderTest < Minitest::Test
     with_home do |home, env|
       write(content, home, ".local", "share", "amp", "threads",
             "T-0f8e1d2c-4b5a-4c6d-8e9f-0a1b2c3d4e5f.json")
-      yield AgentSessions.read(AgentSessions.sessions(:amp, env: env).first)
+      yield Agent::Sessions.read(Agent::Sessions.sessions(:amp, env: env).first)
     end
   end
 end

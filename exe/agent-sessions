@@ -3,7 +3,6 @@
 
 $LOAD_PATH.unshift(File.expand_path("../lib", __dir__))
 
-require "agent_sessions"
-require "agent_sessions/cli"
+require "agent/sessions"
 
-exit AgentSessions::CLI.new(ARGV).run
+exit Agent::Sessions::CLI.new(ARGV).run

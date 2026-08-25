@@ -175,11 +175,11 @@ class OpencodeReaderTest < Minitest::Test
   def conformance_broken
     with_home do |home, _env|
       db_path = write("not a database at all", home, ".local", "share", "opencode", "opencode.db")
-      session = AgentSessions::Session.new(
+      session = Agent::Sessions::Session.new(
         agent: :opencode, id: SESSION_ID, path: db_path, started_at: nil,
         updated_at: Time.now, bytes: nil, format: :sqlite, fidelity: :full
       )
-      yield AgentSessions.read(session)
+      yield Agent::Sessions.read(session)
     end
   end
 
@@ -253,6 +253,6 @@ class OpencodeReaderTest < Minitest::Test
   end
 
   def read_session(env, **options)
-    AgentSessions.read(AgentSessions.sessions(:opencode, env: env).first, **options)
+    Agent::Sessions.read(Agent::Sessions.sessions(:opencode, env: env).first, **options)
   end
 end

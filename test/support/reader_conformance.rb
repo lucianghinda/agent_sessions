@@ -37,7 +37,7 @@ module ReaderConformance
   def test_conformance_parts_declare_known_types
     conformance_hello do |reader|
       reader.messages.flat_map(&:parts).each do |part|
-        assert_includes AgentSessions::Part::TYPES, part.type
+        assert_includes Agent::Sessions::Part::TYPES, part.type
       end
     end
   end
@@ -66,7 +66,7 @@ module ReaderConformance
       assert_silent { messages = reader.messages }
       refute_empty reader.warnings, "an unrecognized record must be reported"
       reader.warnings.each { |warning| assert_kind_of String, warning }
-      messages.flat_map(&:parts).each { |part| assert_includes AgentSessions::Part::TYPES, part.type }
+      messages.flat_map(&:parts).each { |part| assert_includes Agent::Sessions::Part::TYPES, part.type }
     end
   end
 
@@ -90,7 +90,7 @@ module ReaderConformance
 
   def test_conformance_declares_fidelity_and_partiality
     conformance_hello do |reader|
-      assert_includes AgentSessions::Adapters::Base::FIDELITIES, reader.fidelity
+      assert_includes Agent::Sessions::Adapters::Base::FIDELITIES, reader.fidelity
       assert_includes [true, false], reader.partial?
     end
   end
@@ -106,8 +106,8 @@ module ReaderConformance
   def test_conformance_usage_is_a_usage_or_nil
     conformance_hello do |reader|
       usage = reader.usage
-      assert usage.nil? || usage.is_a?(AgentSessions::Usage),
-             "usage must be an AgentSessions::Usage or nil, got #{usage.class}"
+      assert usage.nil? || usage.is_a?(Agent::Sessions::Usage),
+             "usage must be an Agent::Sessions::Usage or nil, got #{usage.class}"
     end
   end
 
@@ -119,13 +119,13 @@ module ReaderConformance
       assert_includes [true, false], reader.branching?
 
       unless reader.branching?
-        assert_raises(AgentSessions::UnsupportedFormat) { reader.tree }
+        assert_raises(Agent::Sessions::UnsupportedFormat) { reader.tree }
         next
       end
 
       roots = reader.tree
       assert_kind_of Array, roots
-      roots.each { |node| assert_kind_of AgentSessions::Node, node }
+      roots.each { |node| assert_kind_of Agent::Sessions::Node, node }
       assert_equal reader.messages.size, count_tree_messages(roots)
     end
   end

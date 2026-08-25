@@ -392,7 +392,7 @@ class ClaudeReaderTest < Minitest::Test
   end
 
   def read_session(env, **options)
-    AgentSessions.read(AgentSessions.sessions(:claude, env: env).first, **options)
+    Agent::Sessions.read(Agent::Sessions.sessions(:claude, env: env).first, **options)
   end
 
   def with_session(records, **options)

@@ -31,7 +31,7 @@ if RUBY_VERSION < "2.5"
 end
 
 SCRIPT_VERSION = "1.0"
-CLAIMS_SOURCE = "agent_sessions 0.2 adapter declarations (lib/agent_sessions/adapters/*.rb)"
+CLAIMS_SOURCE = "agent_sessions 0.2 adapter declarations (lib/agent/sessions/adapters/*.rb)"
 
 # What the gem promises. Transcribed by hand from the adapter DSL so that a gem
 # bug cannot hide behind this script agreeing with it. `env_join` mirrors the DSL:
@@ -240,7 +240,7 @@ def plural(count, word, many = nil)
   "#{count} #{count == 1 ? word : (many || "#{word}s")}"
 end
 
-# Mirrors AgentSessions::Location#files: the path is escaped, the glob never is.
+# Mirrors Agent::Sessions::Location#files: the path is escaped, the glob never is.
 def escape_glob(path)
   path.gsub(/[\{}\[\]*?]/) { |char| "\#{char}" }
 end

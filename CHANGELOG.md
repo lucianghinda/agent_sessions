@@ -1,4 +1,11 @@
-## Unreleased
+## 0.3.0 (2026-08-25)
+
+- Breaking: the Ruby namespace is now `Agent::Sessions`; `AgentSessions` is removed with no alias. `require "agent_sessions"` still works through the shim and defines the new namespace
+- Base-dir resolution now delegates to `agent_homedir` and runs through a per-instance resolver instead of this gem's own expansion rules
+- Relative base-dir environment overrides now join `HOME` instead of the current working directory, `~user` no longer stays literal, and whitespace-only overrides fall back to adapter defaults
+- `cursor_ide` now honors `XDG_CONFIG_HOME` on Linux and `APPDATA` on Windows
+- Blank or non-absolute XDG overrides now fall back to defaults for Amp and opencode, and `OPENCODE_DATA_DIR` now appears in `env_overrides`
+- Adapters whose base-dir rules do not define the current host OS now raise instead of silently assuming Linux
 
 - `Usage` (`input`, `output`, `cache_read`, `cache_creation`, `reasoning`, `cost`): token counts normalized to disjoint buckets across agents. `nil` means "this format does not record that dimension", never zero; `cost` is only ever agent-reported, never derived from a pricing table
 - `Message#usage` and `Message#model`, populated where the format puts them on the message (Claude); `reader.usage` returns session totals or nil

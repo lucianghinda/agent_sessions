@@ -99,6 +99,18 @@ module ReaderConformance
     conformance_hello { |reader| assert_kind_of Array, reader.compactions }
   end
 
+  # usage answers a Usage or nil — nil meaning "this format does not record
+  # totals", never an empty Usage standing in for "nothing recorded". The
+  # per-agent mapping (which fields, which summation rule) is the per-agent
+  # test file's job; this pins only the shape a cross-agent caller sums over.
+  def test_conformance_usage_is_a_usage_or_nil
+    conformance_hello do |reader|
+      usage = reader.usage
+      assert usage.nil? || usage.is_a?(AgentSessions::Usage),
+             "usage must be an AgentSessions::Usage or nil, got #{usage.class}"
+    end
+  end
+
   # tree and branching? must agree. A reader that answers false and then hands
   # back a tree, or answers true and raises, is worse than either alone: a
   # caller has no way left to ask what a store actually records.

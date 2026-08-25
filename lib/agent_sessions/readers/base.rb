@@ -80,6 +80,18 @@ module AgentSessions
         build_tree
       end
 
+      # This session's token totals as a Usage, or nil where the format does
+      # not record them (Amp) or this reader has not learned where they live.
+      # nil, not an empty Usage: "this store does not say" must never read as
+      # "this session cost nothing" — the same rule tree() enforces by raising.
+      #
+      # Each reader that overrides this also decides its own summation rule,
+      # because that rule is format knowledge: Claude repeats one API
+      # response's usage across several records (94 of 124 message ids in one
+      # real transcript), Codex writes a running total where only the last
+      # record counts. A base-class sum would get both wrong.
+      def usage = nil
+
       # Boundaries where the agent replaced earlier turns with a summary. Its
       # own pass: a caller asking only for compactions should not have to
       # materialize every message to get them.
@@ -193,11 +205,20 @@ module AgentSessions
       # newline when the record is longer than the cap, and the following chunks
       # are its continuation. A chunk shorter than the cap without a newline is
       # simply the last line of a file that does not end in one.
+      # The file this reader streams. session.path for every agent that keeps
+      # its conversation in the file Layer 2 enumerated — which is all of them
+      # but Grok, whose session is a DIRECTORY: Layer 2 points at its
+      # summary.json while the turns are in chat_history.jsonl beside it.
+      # A hook here rather than an each_record override there, because the
+      # rest of the streaming (the chunk cap, the oversized report, the
+      # per-line warnings) is exactly what such a reader still wants.
+      def record_path = session.path
+
       def each_record
         line_number = 0
         oversized_at = nil
 
-        File.foreach(session.path, "\n", MAX_RECORD_BYTES) do |chunk|
+        File.foreach(record_path, "\n", MAX_RECORD_BYTES) do |chunk|
           complete = chunk.end_with?("\n") || chunk.bytesize < MAX_RECORD_BYTES
 
           unless complete
@@ -221,7 +242,7 @@ module AgentSessions
         warn_about("record at line #{oversized_at} is too large to read " \
                    "(over #{MAX_RECORD_BYTES} bytes); skipped") if oversized_at
       rescue SystemCallError => e
-        warn_about("#{session.path} could not be read (#{e.class.name.split("::").last})")
+        warn_about("#{record_path} could not be read (#{e.class.name.split("::").last})")
       end
 
       def parse(chunk, line_number)
@@ -232,6 +253,18 @@ module AgentSessions
       rescue JSON::ParserError, EncodingError
         warn_about("line #{line_number} is not valid JSON; skipped")
       end
+
+      # A token count is a whole number or absent. The type check is rule 2's
+      # container check applied to numbers: a format that writes "1234" as a
+      # String, or null, or a float where a count belongs, yields nil here
+      # rather than a value that would poison a sum three callers later.
+      def count_from(value) = value.is_a?(Integer) ? value : nil
+
+      # Cost arrives as a Float (or an Integer zero) where an agent reports
+      # it at all. Same guard, wider type: a cost is money, not a count, and
+      # 0 is a real answer — a subscription session genuinely costs $0
+      # marginal — so only a non-number is absent.
+      def cost_from(value) = value.is_a?(Numeric) ? value : nil
 
       # Agents write ISO 8601 with a Z suffix. nil beats a wrong guess: a
       # timestamp that cannot be parsed is missing, not epoch zero.

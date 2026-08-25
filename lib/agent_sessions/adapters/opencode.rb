@@ -9,6 +9,8 @@ module AgentSessions
       verified_on "2026-07-21"
       fidelity :full
 
+      def self.reader_class = Readers::Opencode
+
       base_dir default: "~/.local/share/opencode", env: "XDG_DATA_HOME", env_join: "opencode"
 
       store :database, path: "opencode.db", format: :sqlite
@@ -16,6 +18,44 @@ module AgentSessions
 
       warning "pre-v1.2.0 storage/ tree may remain on disk after migration; " \
               "counting it alongside opencode.db double-counts sessions"
+
+      # Where opencode keeps its data besides the declared default, in the
+      # order they are tried. Taken from tokentelemetry's probe of the same
+      # store (resources/tokentelemetry, _opencode_db_candidates) and NOT
+      # verified here beyond the first: this machine has only
+      # ~/.local/share/opencode. Before this list, a macOS user whose store
+      # sits under Application Support got an empty result from an agent they
+      # had used — the same class of bug the Cursor IDE adapter had.
+      #
+      # OPENCODE_DATA_DIR is the store's own variable and so outranks
+      # XDG_DATA_HOME, which base_dir already honours; both are checked before
+      # any hardcoded path, and a candidate only wins if it actually holds a
+      # database, so an empty directory cannot shadow a real store.
+      def self.data_dir_candidates(env, home)
+        [
+          env["OPENCODE_DATA_DIR"],
+          (env["XDG_DATA_HOME"] && File.join(env["XDG_DATA_HOME"], "opencode")),
+          File.join(home, ".local", "share", "opencode"),
+          (File.join(home, "Library", "Application Support", "opencode") if platform_for == :macos),
+          (env["APPDATA"] && File.join(env["APPDATA"], "opencode")),
+          (env["LOCALAPPDATA"] && File.join(env["LOCALAPPDATA"], "opencode"))
+        ].compact
+      end
+
+      # The declared default stands unless another candidate actually holds a
+      # database. Falling back to it rather than to the first candidate that
+      # merely exists keeps `where` printing a concrete, conventional path on
+      # a machine with no opencode at all.
+      def base_dir
+        @base_dir ||= self.class.data_dir_candidates(@env, home)
+                          .find { |dir| Dir.glob(File.join(escape_glob(dir), DATABASE_GLOB)).any? } || super
+      end
+
+      # opencode names its database per release channel — opencode.db,
+      # opencode-stable.db — so the filename is a glob, not a constant
+      # (tokentelemetry globs the same pattern). Unverified here: this machine
+      # has only the plain name.
+      DATABASE_GLOB = "opencode*.db"
 
       SESSION_COLUMNS = "id, directory, time_created, time_updated"
 
@@ -59,12 +99,22 @@ module AgentSessions
       # caller taking `sessions.first` never leaves a connection open waiting
       # for GC to reclaim the fiber.
       def sessions
-        db_path = primary_layer.path
-        return [].lazy unless File.exist?(db_path)
+        paths = database_paths
+        return [].lazy if paths.empty?
 
         Enumerator.new do |yielder|
-          each_session_row(db_path, "SELECT #{SESSION_COLUMNS} FROM session") do |row|
-            yielder << build_db_session(db_path, row)
+          seen = {}
+          paths.each do |db_path|
+            each_session_row(db_path, "SELECT #{SESSION_COLUMNS} FROM session") do |row|
+              # Channel databases can hold the same session — a store migrated
+              # between channels keeps both files. Deduped by id, first
+              # database wins, so one session is one row to a caller counting
+              # them. tokentelemetry dedups the same way for the same reason.
+              next if seen[row.first]
+
+              seen[row.first] = true
+              yielder << build_db_session(db_path, row)
+            end
           end
         end.lazy
       end
@@ -73,12 +123,18 @@ module AgentSessions
       # WHERE clause instead of the Base read-and-compare loop.
       def sessions_for_project(dir)
         dir = File.expand_path(dir)
-        db_path = primary_layer.path
-        return [].lazy unless File.exist?(db_path)
+        paths = database_paths
+        return [].lazy if paths.empty?
 
         Enumerator.new do |yielder|
-          each_session_row(db_path, "SELECT #{SESSION_COLUMNS} FROM session WHERE directory = ?", [dir]) do |row|
-            yielder << build_db_session(db_path, row)
+          seen = {}
+          paths.each do |db_path|
+            each_session_row(db_path, "SELECT #{SESSION_COLUMNS} FROM session WHERE directory = ?", [dir]) do |row|
+              next if seen[row.first]
+
+              seen[row.first] = true
+              yielder << build_db_session(db_path, row)
+            end
           end
         end.lazy
       end
@@ -96,17 +152,60 @@ module AgentSessions
       # identical bytes would surface as two entries where Base's own
       # `.uniq.sort` would collapse them to one.
       def project_paths
-        db_path = primary_layer.path
-        return [] unless File.exist?(db_path)
-
         paths = []
-        each_session_row(db_path, "SELECT DISTINCT directory FROM session ORDER BY directory") do |row|
-          paths << row.first if row.first.is_a?(String)
+        database_paths.each do |db_path|
+          each_session_row(db_path, "SELECT DISTINCT directory FROM session ORDER BY directory") do |row|
+            paths << row.first if row.first.is_a?(String)
+          end
         end
-        paths.uniq
+        # Sorted after the union, not per database: SQL's ORDER BY only orders
+        # within one file, and two channel databases concatenated would leave
+        # `projects` unsorted — the one thing Base guarantees about it.
+        paths.uniq.sort
+      end
+
+      # Base checks the declared path literally, which gets a machine holding
+      # only a channel-named database wrong twice: its "is this agent
+      # installed" gate sees no declared layer and skips the store checks
+      # entirely, and the store check itself would report :fail on a real
+      # store that is merely called something the declaration did not predict.
+      #
+      # Any file matching the glob satisfies the claim. The detail names what
+      # was actually found, so a non-canonical filename is visible rather than
+      # merely tolerated — the same reason detail_for prints a file count.
+      def verify
+        found = database_paths
+        return super if found.empty?
+
+        checks = super
+        database = checks.find { |candidate| candidate.claim == "store database exists" }
+        return checks.map { |c| c.claim == database&.claim && !c.pass? ? passing_database(found) : c } if database
+
+        # The skip gate fired: Base returned one :skip and never looked at the
+        # stores. Answer the store claim it never asked.
+        [passing_database(found)] + checks.reject { |c| c.claim == "agent is installed" }
       end
 
       private
+
+      def passing_database(found)
+        check(:pass, "store database exists", found.join(", "))
+      end
+
+      # Every database in the resolved store directory, canonical name first
+      # so its ids win the dedup above. Sorted for a stable order across runs;
+      # Dir.glob's own order is filesystem-dependent.
+      #
+      # The existence check that used to live in each caller is this method
+      # returning empty: a machine without opencode never opens anything, and
+      # so never needs the sqlite3 gem (design doc section 9).
+      def database_paths
+        @database_paths ||= begin
+          found = Dir.glob(File.join(escape_glob(base_dir), DATABASE_GLOB)).sort
+          canonical = primary_layer.path
+          found.include?(canonical) ? [canonical] + (found - [canonical]) : found
+        end
+      end
 
       # `directory` carries TEXT affinity, so any numeric literal written to it
       # is converted to text at INSERT time (SQLite's own rule, the mirror image
@@ -202,78 +301,33 @@ module AgentSessions
       # Ruby would evaluate the SQLite3::Exception rescue clause while matching
       # and hit NameError, because the constant was never loaded.
       #
-      # No immutable=1: it tells SQLite to trust that the file will never
-      # change and skip locking AND the WAL entirely, reading only the base
-      # table file — against a live, WAL-mode opencode.db that means silently
-      # missing every committed-but-not-yet-checkpointed session, which is
-      # worse than the alternative this method accepts instead: opening a
-      # WAL-mode db even read-only makes SQLite create or touch the -shm
-      # sidecar (and an empty -wal, if neither exists yet) as part of its own
-      # reader-bookkeeping — confirmed directly (write a WAL db, close it so
-      # both sidecars are gone, then reopen mode=ro and query: both files
-      # reappear). That is SQLite's own concurrency machinery recording that a
-      # reader is active, not this gem writing session data anywhere, and the
-      # actual opencode.db table content is never touched by it — but it does
-      # mean design doc section 10 promise 1 ("never write") holds only at the
-      # level of "never touches the recorded sessions," not "zero bytes change
-      # under the store directory," for this one adapter. A directory with no
-      # write permission at all (as opposed to the file itself) surfaces that
-      # limit directly: SQLite cannot create/open the -shm file and raises
-      # SQLite3::ReadOnlyException, which each_session_row's rescue below
-      # turns into UnreadableStore like any other query failure — confirmed
-      # directly against a chmod 0555 directory, not assumed.
+      # The open itself (read-only URI with escaped path, no immutable=1,
+      # 5s busy_timeout) lives in AgentSessions::Sqlite with the evidence for
+      # each choice — extracted when the opencode READER became its second
+      # caller. What stays here is this adapter's answer to failure: a query
+      # error becomes UnreadableStore, because a vanished or corrupt DATABASE
+      # is the store's only source for every session — there is nothing
+      # partial to return. Design doc section 10's "never write" caveat also
+      # still belongs to this store: opening a WAL db even read-only touches
+      # its -shm/-wal sidecars (SQLite's reader bookkeeping, confirmed
+      # directly); a directory with no write permission surfaces as
+      # SQLite3::ReadOnlyException → UnreadableStore, confirmed against a
+      # chmod 0555 directory.
       #
-      # busy_timeout gives SQLite up to 5s to retry internally against a lock
-      # held by opencode's own live writer before giving up — opencode may be
-      # running while this reads (design doc section 9), and a WAL writer's
-      # lock is normally held only for the instant of a commit, not the whole
-      # session, so a lock that has not cleared within 5s is a stuck process,
-      # not ordinary contention. Without this, SQLite3::BusyException fires on
-      # the first attempt with no retry at all, turning routine contention on
-      # a live store into the same UnreadableStore raised for a genuinely
-      # corrupt file — a real distinction (design doc section 9 draws it
-      # explicitly) that this timeout narrows without pretending to close:
-      # a writer that is ITSELF stuck for 5+ seconds still surfaces as
-      # UnreadableStore, same as before, just no longer on ordinary contention.
-      # NOT covered by a test: reliably reproducing lock contention needs a
-      # second process or thread holding a write transaction for the exact
-      # duration of the read, which nothing here attempts — noted rather than
-      # left looking covered.
+      # Lock contention is NOT covered by a test: reliably reproducing it
+      # needs a second process holding a write transaction for the exact
+      # duration of the read — noted rather than left looking covered.
       def each_session_row(db_path, sql, params = [], &block)
         require_sqlite!
         db = nil
         begin
-          db = SQLite3::Database.new(
-            "file:#{escape_uri_path(db_path)}?mode=ro",
-            flags: SQLite3::Constants::Open::READONLY | SQLite3::Constants::Open::URI
-          )
-          db.busy_timeout = 5_000
+          db = Sqlite.open_readonly(db_path)
           db.execute(sql, params, &block)
         rescue SQLite3::Exception => e
           raise UnreadableStore, "#{db_path}: #{e.message}"
         ensure
           db&.close
         end
-      end
-
-      # IMPORTANT, caught in review: SQLite's URI parser gives `%`, `#` and
-      # `?` syntactic meaning, and db_path was being interpolated raw. `#`
-      # starts a fragment (silently truncating the path there); `?` starts
-      # the query string, colliding with the `?mode=ro` this method appends.
-      # The worst case, confirmed directly: a path segment that merely
-      # CONTAINS a valid-looking percent-escape — a directory literally named
-      # "a%23b" — gets that escape DECODED by the URI parser into a different
-      # path ("a#b"), so a second, unrelated database sitting at THAT path is
-      # read instead, silently, with no exception at all. Escaping all three
-      # in one pass over the ORIGINAL string is what keeps db_path a literal
-      # string rather than partial URI grammar — Location#files draws the
-      # same line for glob metacharacters, on the same reasoning: a resolved
-      # path may legitimately contain them. One pass, not two sequential
-      # gsubs (escape # and ? first, then % after): escaping # to %23 and
-      # THEN escaping the % that produced would double-encode it to %2523,
-      # corrupting the very escape this method exists to produce correctly.
-      def escape_uri_path(path)
-        path.gsub(/[%#?]/) { format("%%%02X", _1.ord) }
       end
 
       def require_sqlite!

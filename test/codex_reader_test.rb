@@ -258,6 +258,40 @@ class CodexReaderTest < Minitest::Test
     end
   end
 
+  # Shapes and semantics from a real rollout on this machine (2026-08-24):
+  # total_token_usage is a running total, so the LAST token_count record is
+  # the session — an earlier record's smaller totals must not survive — and
+  # its input_tokens includes cached_input_tokens, so the reader subtracts to
+  # match Usage's disjoint contract (33,431 including 19,200 in the sample).
+  def test_usage_is_the_last_token_count_with_cached_input_made_disjoint
+    records = [user_message("hi"),
+               token_count(input: 33_431, cached: 19_200, output: 320, reasoning: 213),
+               token_count(input: 68_554, cached: 51_712, cache_write: 40, output: 581, reasoning: 281)]
+    with_session(records) do |reader|
+      usage = reader.usage
+      assert_equal 68_554 - 51_712, usage.input
+      assert_equal 51_712, usage.cache_read
+      assert_equal 40, usage.cache_creation
+      assert_equal 581, usage.output
+      assert_equal 281, usage.reasoning
+      assert_nil usage.cost, "Codex reports no cost; nil must not become zero"
+    end
+  end
+
+  def test_usage_is_nil_without_a_token_count_record
+    with_session([user_message("hi"), event_msg("task_started")]) { |reader| assert_nil reader.usage }
+  end
+
+  # Codex writes no usage on the messages themselves — the totals live in
+  # token_count event records — so a message-level nil is the format speaking,
+  # not this reader failing to look.
+  def test_messages_carry_no_usage_or_model
+    with_session([assistant_message("hi")]) do |reader|
+      assert_nil reader.messages.first.usage
+      assert_nil reader.messages.first.model
+    end
+  end
+
   def test_reader_reports_the_adapter_fidelity_and_is_not_partial
     with_session([user_message("hi")]) do |reader|
       assert_equal :full, reader.fidelity
@@ -313,6 +347,19 @@ class CodexReaderTest < Minitest::Test
 
   def event_msg(type)
     { type: "event_msg", timestamp: STAMP, payload: { type: type, info: {} } }
+  end
+
+  # The running-total record, shaped as observed: totals under
+  # info.total_token_usage, the per-turn slice beside it ignored by the reader.
+  def token_count(input:, cached:, output:, reasoning:, cache_write: 0)
+    { type: "event_msg", timestamp: STAMP,
+      payload: { type: "token_count",
+                 info: { total_token_usage: {
+                   input_tokens: input, cached_input_tokens: cached,
+                   cache_write_input_tokens: cache_write, output_tokens: output,
+                   reasoning_output_tokens: reasoning,
+                   total_tokens: input + output
+                 }, model_context_window: 258_400 } } }
   end
 
   def compacted(texts)

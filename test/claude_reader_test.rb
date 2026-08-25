@@ -58,10 +58,12 @@ class ClaudeReaderTest < Minitest::Test
     end
   end
 
-  # Nine record types carry session state, not conversation: ai-title, mode,
+  # Eleven record types carry session state, not conversation: ai-title, mode,
   # permission-mode, agent-name, last-prompt, file-history-snapshot,
-  # file-history-delta, queue-operation, pr-link. Together they are a third of
-  # every record written, and none of them is a turn.
+  # file-history-delta, queue-operation, pr-link, plus atis-latch and
+  # bridge-session (which postdate the 2026-08-12 corpus — observed live,
+  # 2026-08-24). Together they are a third of every record written, and none
+  # of them is a turn.
   def test_session_state_records_are_neither_messages_nor_warnings
     state = [{ type: "ai-title", aiTitle: "fixing the parser", sessionId: SESSION },
              { type: "mode", mode: "default", sessionId: SESSION },
@@ -71,7 +73,10 @@ class ClaudeReaderTest < Minitest::Test
              { type: "file-history-delta", messageId: "m1", trackingPath: "/tmp/x", backup: {} },
              { type: "queue-operation", operation: "enqueue", content: "later", sessionId: SESSION },
              { type: "pr-link", prNumber: 3, prUrl: "https://example.com", sessionId: SESSION },
-             { type: "agent-name", agentName: "claude", sessionId: SESSION }]
+             { type: "agent-name", agentName: "claude", sessionId: SESSION },
+             { type: "atis-latch", atis: "", sessionId: SESSION },
+             { type: "bridge-session", sessionId: SESSION, bridgeSessionId: "cse_1",
+               lastSequenceNum: 0 }]
 
     with_session([user_turn("hi")] + state) do |reader|
       assert_equal 1, reader.messages.size
@@ -273,6 +278,54 @@ class ClaudeReaderTest < Minitest::Test
     end
   end
 
+  # Field names from a real transcript on this machine (2026-08-24):
+  # input_tokens is disjoint from both cache counts (Anthropic semantics), and
+  # thinking tokens sit under output_tokens_details.
+  def test_an_assistant_message_carries_its_usage_and_model
+    with_session([user_turn("hi"), billed_turn(id: "msg_1", input: 2, output: 1878)]) do |reader|
+      user, assistant = reader.messages
+      assert_nil user.usage
+      assert_nil user.model
+
+      assert_equal "claude-fable-5", assistant.model
+      assert_equal 2, assistant.usage.input
+      assert_equal 1878, assistant.usage.output
+      assert_equal 24_332, assistant.usage.cache_read
+      assert_equal 36_105, assistant.usage.cache_creation
+      assert_equal 383, assistant.usage.reasoning
+      assert_nil assistant.usage.cost, "Claude reports no cost; nil must not become zero"
+    end
+  end
+
+  # One API response streams into one record per content block, every record
+  # repeating the same message.id and the same usage: 260 assistant records
+  # share 124 ids in one real transcript, 94 ids repeating with identical
+  # usage. The session total must count each id once, or it roughly doubles.
+  def test_usage_counts_a_repeated_message_id_once
+    records = [billed_turn(id: "msg_1", input: 10, output: 5),
+               billed_turn(id: "msg_1", input: 10, output: 5),
+               billed_turn(id: "msg_2", input: 7, output: 3)]
+    with_session(records) do |reader|
+      assert_equal 17, reader.usage.input
+      assert_equal 8, reader.usage.output
+    end
+  end
+
+  def test_usage_is_nil_when_no_record_carries_any
+    with_session([user_turn("hi")]) { |reader| assert_nil reader.usage }
+  end
+
+  # "1234" where a count belongs is not a count. One malformed field must
+  # not poison the sum; the others still count.
+  def test_a_non_integer_count_is_absent_rather_than_wrong
+    record = billed_turn(id: "msg_1", input: 10, output: 5)
+    record[:message][:usage][:input_tokens] = "not a number"
+    with_session([record]) do |reader|
+      assert_nil reader.usage.input
+      assert_equal 5, reader.usage.output
+    end
+  end
+
   def test_reader_reports_full_fidelity
     with_session([user_turn("hi")]) do |reader|
       assert_equal :full, reader.fidelity
@@ -315,6 +368,19 @@ class ClaudeReaderTest < Minitest::Test
 
   def user_turn(text) = turn("user", [{ type: "text", text: text }])
   def assistant_turn(text) = turn("assistant", [{ type: "text", text: text }])
+
+  # An assistant record the way the API writes it: model and usage beside the
+  # content, cache and thinking counts shaped as observed on this machine.
+  def billed_turn(id:, input:, output:)
+    record = assistant_turn("ok")
+    record[:message].merge!(
+      id: id, model: "claude-fable-5",
+      usage: { input_tokens: input, output_tokens: output,
+               cache_read_input_tokens: 24_332, cache_creation_input_tokens: 36_105,
+               output_tokens_details: { thinking_tokens: 383 } }
+    )
+    record
+  end
   def user_parts(parts) = turn("user", parts)
   def assistant_parts(parts) = turn("assistant", parts)
 

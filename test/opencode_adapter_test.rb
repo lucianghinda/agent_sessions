@@ -393,6 +393,85 @@ class OpencodeAdapterTest < Minitest::Test
     end
   end
 
+  # --- store discovery (added 2026-08-24) ---
+  #
+  # Before this, only ~/.local/share/opencode was looked at, so a macOS user
+  # whose store sits under Application Support got an empty result from an
+  # agent they had used. The candidate list comes from tokentelemetry probing
+  # the same store; only the default is verified on the machine this was
+  # written on, which is why every other branch is exercised by a fixture.
+
+  def test_the_macos_application_support_store_is_found
+    skip "macOS-only candidate" unless AgentSessions::Adapters::Base.platform_for == :macos
+
+    with_home do |home, env|
+      path = File.join(home, "Library", "Application Support", "opencode", "opencode.db")
+      build_raw_db(path, [["ses_mac", "/Users/you/app", 1, 2]])
+      assert_equal ["ses_mac"], AgentSessions.sessions(:opencode, env: env).map(&:id).force
+    end
+  end
+
+  def test_opencode_data_dir_outranks_every_hardcoded_candidate
+    with_home do |home, env|
+      build_db(home, [["ses_default", "/Users/you/app", 1, 2]])
+      elsewhere = File.join(home, "elsewhere")
+      build_raw_db(File.join(elsewhere, "opencode.db"), [["ses_env", "/Users/you/app", 1, 2]])
+      found = AgentSessions.sessions(:opencode, env: env.merge("OPENCODE_DATA_DIR" => elsewhere))
+      assert_equal ["ses_env"], found.map(&:id).force
+    end
+  end
+
+  # A directory that exists but holds no database must not shadow a real store
+  # further down the list — the reason the candidate test is "holds a db",
+  # not "exists".
+  def test_an_empty_candidate_directory_does_not_shadow_a_real_store
+    with_home do |home, env|
+      empty = File.join(home, "empty")
+      FileUtils.mkdir_p(empty)
+      build_db(home, [["ses_default", "/Users/you/app", 1, 2]])
+      found = AgentSessions.sessions(:opencode, env: env.merge("OPENCODE_DATA_DIR" => empty))
+      assert_equal ["ses_default"], found.map(&:id).force
+    end
+  end
+
+  # opencode names its database per release channel. A store holding only
+  # opencode-stable.db is a real store, and used to report nothing.
+  def test_a_release_channel_database_is_enumerated_and_verified
+    with_home do |home, env|
+      path = File.join(home, ".local", "share", "opencode", "opencode-stable.db")
+      build_raw_db(path, [["ses_stable", "/Users/you/app", 1, 2]])
+      assert_equal ["ses_stable"], AgentSessions.sessions(:opencode, env: env).map(&:id).force
+      database = AgentSessions.verify(:opencode, env: env).find { |c| c.claim == "store database exists" }
+      assert_predicate database, :pass?, "a channel-named database must satisfy the declared store"
+      assert_includes database.detail, "opencode-stable.db"
+    end
+  end
+
+  # Two channel databases can hold the same session after a migration. One
+  # session is one row to a caller counting them.
+  def test_the_same_session_in_two_databases_is_reported_once
+    with_home do |home, env|
+      dir = File.join(home, ".local", "share", "opencode")
+      build_raw_db(File.join(dir, "opencode.db"), [["ses_shared", "/Users/you/app", 1, 2]])
+      build_raw_db(File.join(dir, "opencode-stable.db"), [["ses_shared", "/Users/you/app", 1, 2],
+                                                          ["ses_only_stable", "/Users/you/app", 1, 2]])
+      ids = AgentSessions.sessions(:opencode, env: env).map(&:id).force
+      assert_equal %w[ses_shared ses_only_stable].sort, ids.sort
+      assert_equal 1, ids.count("ses_shared")
+    end
+  end
+
+  # SQL ORDER BY sorts within one file; the union of two must still be sorted,
+  # which is the one thing Base guarantees about project_paths.
+  def test_projects_are_sorted_across_two_databases
+    with_home do |home, env|
+      dir = File.join(home, ".local", "share", "opencode")
+      build_raw_db(File.join(dir, "opencode.db"), [["s1", "/z/last", 1, 2]])
+      build_raw_db(File.join(dir, "opencode-stable.db"), [["s2", "/a/first", 1, 2]])
+      assert_equal ["/a/first", "/z/last"], AgentSessions.projects(:opencode, env: env)
+    end
+  end
+
   private
 
   def silence_warnings

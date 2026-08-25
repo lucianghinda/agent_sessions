@@ -14,6 +14,7 @@ require_relative "agent_sessions/check"
 require_relative "agent_sessions/session"
 require_relative "agent_sessions/message"
 require_relative "agent_sessions/home_expansion"
+require_relative "agent_sessions/sqlite"
 # Before base: Base's class body includes Enumeration.
 require_relative "agent_sessions/adapters/enumeration"
 require_relative "agent_sessions/adapters/base"
@@ -24,10 +25,20 @@ require_relative "agent_sessions/adapters/amp"
 require_relative "agent_sessions/adapters/opencode"
 require_relative "agent_sessions/adapters/cursor"
 require_relative "agent_sessions/adapters/cursor_ide"
+require_relative "agent_sessions/adapters/gemini"
+require_relative "agent_sessions/adapters/qwen"
+require_relative "agent_sessions/adapters/copilot"
+require_relative "agent_sessions/adapters/grok"
 require_relative "agent_sessions/readers/base"
 require_relative "agent_sessions/readers/codex"
 require_relative "agent_sessions/readers/claude"
 require_relative "agent_sessions/readers/amp"
+require_relative "agent_sessions/readers/opencode"
+require_relative "agent_sessions/readers/pi"
+require_relative "agent_sessions/readers/gemini"
+require_relative "agent_sessions/readers/qwen"
+require_relative "agent_sessions/readers/copilot"
+require_relative "agent_sessions/readers/grok"
 require_relative "agent_sessions/audit"
 
 module AgentSessions
@@ -203,6 +214,10 @@ AgentSessions.register(AgentSessions::Adapters::Amp)
 AgentSessions.register(AgentSessions::Adapters::Opencode)
 AgentSessions.register(AgentSessions::Adapters::Cursor)
 AgentSessions.register(AgentSessions::Adapters::CursorIde)
+AgentSessions.register(AgentSessions::Adapters::Gemini)
+AgentSessions.register(AgentSessions::Adapters::Qwen)
+AgentSessions.register(AgentSessions::Adapters::Copilot)
+AgentSessions.register(AgentSessions::Adapters::Grok)
 
 # The oldest verified_on among the built-in adapters. A claim about somebody
 # else's software is only as current as its weakest link, so this is the honest

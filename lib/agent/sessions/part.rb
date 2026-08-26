@@ -11,8 +11,6 @@ module Agent
           # neither — its URL or payload stays in raw, because normalizing an image
           # would mean deciding whether to load it, and reading is stat-cheap by design.
           Part = Data.define(:type, :text, :name, :call_id) do
-            self::TYPES = %i[text thinking tool_use tool_result image unknown].freeze
-
             def initialize(type:, text: nil, name: nil, call_id: nil)
               types = self.class::TYPES
               raise ArgumentError, "part type #{type.inspect} must be one of #{types.join(", ")}" unless types.include?(type)
@@ -20,5 +18,6 @@ module Agent
               super
             end
           end
+          Part::TYPES = %i[text thinking tool_use tool_result image unknown].freeze
   end
 end

@@ -1,0 +1,62 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "rbconfig"
+require "rubygems/package"
+
+class ReleasePreparer
+  DEFAULT_RUNNER = lambda do |command, working_directory|
+    system(*command, chdir: working_directory)
+  end
+  DEFAULT_BUILDER = lambda do |working_directory|
+    specification = Gem::Specification.load(File.join(working_directory, "agent_sessions.gemspec"))
+    Dir.chdir(working_directory) { Gem::Package.build(specification) }
+  end
+
+  def initialize(
+    root: File.expand_path("..", __dir__),
+    ruby: RbConfig.ruby,
+    runner: DEFAULT_RUNNER,
+    builder: DEFAULT_BUILDER,
+    stderr: $stderr
+  )
+    @root = root
+    @ruby = ruby
+    @runner = runner
+    @builder = builder
+    @stderr = stderr
+  end
+
+  def call
+    commands.each do |command|
+      next if runner.call(command, root)
+
+      stderr.puts "Release preparation failed: #{command.join(" ")}"
+      return false
+    end
+
+    begin
+      return true if builder.call(root)
+    rescue StandardError => error
+      stderr.puts "Release preparation failed: build agent_sessions.gemspec (#{error.class}: #{error.message})"
+      return false
+    end
+
+    stderr.puts "Release preparation failed: build agent_sessions.gemspec"
+    false
+  end
+
+  private
+
+  attr_reader :root, :ruby, :runner, :builder, :stderr
+
+  def commands
+    [
+      [ruby, "-S", "bundle", "exec", "rake", "test"],
+      [ruby, "-S", "bundle", "exec", "rake", "yard"],
+      [ruby, File.join(root, "bin", "generate_llm.rb")]
+    ]
+  end
+end
+
+exit(ReleasePreparer.new.call ? 0 : 1) if $PROGRAM_NAME == __FILE__

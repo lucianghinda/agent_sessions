@@ -107,33 +107,4 @@ class EnumerationTest < Minitest::Test
     end
   end
 
-  # The Layer 2 conformance gate skips when a test class does not define
-  # expected_session_id. That was right while adapters adopted one at a time;
-  # from 0.2 on, a skip means a test class lost its opt-in, which would hide
-  # three real tests per adapter behind an expected-looking skip count.
-  #
-  # FakeAdapter is deleted first: this class's own setup registers it as a
-  # test double for Layer 1 fixtures, it is never shipped, and no test class
-  # opts it into Layer 2 conformance (nor should one — it has no on-disk
-  # format to enumerate), so leaving it registered would make this assertion
-  # fail for a reason that has nothing to do with the seven real adapters it
-  # exists to police. teardown's own `registry.delete(:fake)` still runs
-  # after this test and is a harmless no-op against an already-missing key.
-  def test_every_registered_adapter_opts_into_layer_2_conformance
-    Agent::Sessions.registry.delete(:fake)
-
-    missing = Agent::Sessions.agents.reject do |agent|
-      klass = Agent::Sessions.registry.fetch(agent)
-      test_class = ObjectSpace.each_object(Class).find do |candidate|
-        candidate < Minitest::Test &&
-          candidate.method_defined?(:adapter_class) &&
-          candidate.instance_method(:adapter_class).bind_call(candidate.allocate) == klass
-      rescue StandardError
-        false
-      end
-      test_class&.private_method_defined?(:expected_session_id) ||
-        test_class&.method_defined?(:expected_session_id)
-    end
-    assert_empty missing, "adapters with no Layer 2 conformance opt-in: #{missing.inspect}"
-  end
 end

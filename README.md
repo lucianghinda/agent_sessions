@@ -2,6 +2,8 @@
 
 Where do AI coding agents store their session logs? This gem knows.
 
+![agent-sessions demo](demo.gif)
+
 Resolves session store paths for Claude Code, Codex CLI, Cursor (CLI and IDE), Amp CLI, opencode, pi, Gemini CLI, GitHub Copilot CLI, Qwen Code, and Grok Build. Verifies those paths against disk. Audits whether plaintext transcripts sit inside anything that syncs.
 
 Read-only by design. Runtime dependencies: `agent_homedir` and `zeitwerk`.
@@ -12,11 +14,21 @@ Two adapters, Qwen Code and Grok Build, are marked provisional: no such store ex
 
 ## Installation
 
-Add to your Gemfile:
+Use Ruby 3.2 or newer.
+
+Install the CLI directly:
+
+```sh
+gem install agent_sessions
+```
+
+Or add to your application's Gemfile:
 
 ```ruby
 gem "agent_sessions"
 ```
+
+Enumerating the SQLite-backed agents — opencode, Cursor IDE, and GitHub Copilot CLI — needs the optional `sqlite3` gem. Every other adapter works without it.
 
 ## Quick start
 
@@ -30,7 +42,31 @@ agent-sessions du --by project
 
 Add `--json` to `where`, `doctor`, `audit`, `list`, or `du` for machine-readable output. `du --by project` is the one command in the gem that is not stat-only: resolving a project name pays one bounded read per session for the file-based agents (opencode answers from its own SQL query instead, so it pays nothing extra).
 
+## Supported agents
+
+Use the bare name in CLI arguments and the symbol in Ruby calls:
+
+| Agent | CLI | Ruby |
+| --- | --- | --- |
+| Claude Code | `claude` | `:claude` |
+| Codex CLI | `codex` | `:codex` |
+| Cursor CLI | `cursor` | `:cursor` |
+| Cursor IDE | `cursor_ide` | `:cursor_ide` |
+| Amp CLI | `amp` | `:amp` |
+| opencode | `opencode` | `:opencode` |
+| pi | `pi` | `:pi` |
+| Gemini CLI | `gemini` | `:gemini` |
+| GitHub Copilot CLI | `copilot` | `:copilot` |
+| Qwen Code | `qwen` | `:qwen` |
+| Grok Build | `grok` | `:grok` |
+
+Ruby callers passing any other symbol get `Agent::Sessions::UnknownAgent`; its message lists the valid names. The CLI catches that error, prints its message, and exits with status 1.
+
 ## Ruby API
+
+![agent_sessions Ruby API demo](demo-ruby.gif)
+
+Browse the [generated API documentation](https://github.com/lucianghinda/agent_sessions/blob/main/doc/Agent/Sessions.md) or the consolidated [`llm.txt`](https://github.com/lucianghinda/agent_sessions/blob/main/llm.txt) reference.
 
 ```ruby
 require "agent_sessions" # compatibility shim for Agent::Sessions
@@ -70,7 +106,7 @@ Agent::Sessions.for_project(Dir.pwd)            # every agent's sessions for one
 Agent::Sessions.projects(:codex)                # distinct recorded project paths (reads headers)
 ```
 
-Enumerating the SQLite-backed agents — opencode, Cursor IDE and Copilot CLI — needs the optional `sqlite3` gem. Readers exist for opencode and Copilot CLI; Cursor IDE remains metadata-only. The other adapters do not need that additional optional dependency.
+Among the SQLite-backed agents, readers exist for opencode and Copilot CLI; Cursor IDE remains metadata-only.
 
 Read a session's messages and token usage (Claude, Codex, Amp, opencode, pi, Gemini CLI, Copilot CLI, Qwen and Grok):
 
@@ -86,12 +122,44 @@ reader.usage&.input                           # disjoint buckets: input, output,
 
 `Session#bytes` is what that session occupies on disk, not just its transcript. Claude Code writes a sidecar directory beside each transcript — `<id>/subagents/`, `<id>/tool-results/` — and those bytes belong to the session that produced them, which is why `du` and `audit` agree on the same store.
 
+### Errors
+
+Every domain-specific error the gem raises descends from `Agent::Sessions::Error`:
+
+- Catch `Agent::Sessions::UnknownAgent` for a name outside the supported-agents table; the message lists valid names.
+- Catch `Agent::Sessions::MissingDependency` when a SQLite-backed agent is enumerated without the optional `sqlite3` gem installed.
+- Catch `Agent::Sessions::UnsupportedFormat` when `read` is called on a session whose format has no reader (Cursor CLI and Cursor IDE).
+- Catch `Agent::Sessions::UnreadableStore` when a store exists but cannot be opened.
+
 ## Roadmap
 
 - 0.2: enumerate sessions, map them to projects (`list`, `du`)
 - **0.3 (this release):** read and normalize messages; Ruby API renamed to `Agent::Sessions` while `require "agent_sessions"` stays as the compatibility shim, and base-dir resolution delegates to `agent_homedir`
-- 0.4: Cursor IDE remains metadata-only; the opencode and Copilot CLI SQLite readers landed in 0.3
+- 0.4: a reader for Cursor IDE, which is metadata-only today
 - 0.5: `export` with secret redaction
+
+## Contributing
+
+Activate Ruby 3.2 or newer.
+
+Run the tests before sending a change:
+
+```sh
+bundle install
+bundle exec rake test
+```
+
+Before a release, run:
+
+```sh
+bin/prepare_release
+```
+
+It runs the test suite, regenerates the API documentation and `llm.txt`, and builds the gem without publishing it.
+
+## License
+
+MIT
 
 ## History
 

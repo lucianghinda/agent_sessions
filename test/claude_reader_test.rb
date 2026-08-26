@@ -215,6 +215,14 @@ class ClaudeReaderTest < Minitest::Test
     end
   end
 
+  def test_linked_turn_serializes_without_duplicate_json_keys
+    document = nil
+
+    assert_silent { document = JSON.generate(linked("assistant", "u2", "u1", "hello")) }
+    assert_equal 1, document.scan(/"uuid":/).size
+    assert_equal "u2", JSON.parse(document).fetch("uuid")
+  end
+
   def test_a_linear_conversation_is_a_chain_of_single_children
     records = [linked("user", "u1", nil, "one"),
                linked("assistant", "u2", "u1", "two"),
@@ -363,7 +371,7 @@ class ClaudeReaderTest < Minitest::Test
 
   # A turn with explicit tree links, as every real record carries them.
   def linked(role, uuid, parent_uuid, text)
-    turn(role, [{ type: "text", text: text }]).merge("uuid" => uuid, "parentUuid" => parent_uuid)
+    turn(role, [{ type: "text", text: text }]).merge(uuid: uuid, parentUuid: parent_uuid)
   end
 
   def user_turn(text) = turn("user", [{ type: "text", text: text }])

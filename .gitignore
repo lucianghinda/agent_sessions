@@ -2,8 +2,9 @@
 /.yardoc
 /_yardoc/
 /coverage/
-/doc/
 /pkg/
 /spec/reports/
 /tmp/
+*.gem
 Gemfile.lock
+/docs/handoffs/

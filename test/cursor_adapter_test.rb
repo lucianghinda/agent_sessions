@@ -125,7 +125,7 @@ class CursorAdapterTest < Minitest::Test
       # — not this test file's own Ruby source — that overflows it to Infinity.
       write('{"createdAtMs": 1e400}', home, ".cursor", "chats", "chat-huge", "u", "meta.json")
       session = silence_warnings { Agent::Sessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-huge/u" } }
-      assert_equal base_started_at(session), session.started_at
+      assert_optional_equal base_started_at(session), session.started_at
       assert_equal File.mtime(db), session.updated_at
     end
   end
@@ -140,7 +140,7 @@ class CursorAdapterTest < Minitest::Test
       db = write("", home, ".cursor", "chats", "chat-bignum", "u", "store.db")
       write(JSON.generate({ createdAtMs: 10**400 }), home, ".cursor", "chats", "chat-bignum", "u", "meta.json")
       session = silence_warnings { Agent::Sessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-bignum/u" } }
-      assert_equal base_started_at(session), session.started_at
+      assert_optional_equal base_started_at(session), session.started_at
       assert_equal File.mtime(db), session.updated_at
     end
   end
@@ -156,7 +156,7 @@ class CursorAdapterTest < Minitest::Test
       db = write("", home, ".cursor", "chats", "chat-str", "u", "store.db")
       write(JSON.generate({ createdAtMs: "not-a-number" }), home, ".cursor", "chats", "chat-str", "u", "meta.json")
       session = Agent::Sessions::Adapters::Cursor.new(env: env).sessions.find { |s| s.id == "chat-str/u" }
-      assert_equal base_started_at(session), session.started_at
+      assert_optional_equal base_started_at(session), session.started_at
       assert_equal File.mtime(db), session.updated_at
     end
   end

@@ -109,8 +109,8 @@ class CodexAdapterTest < Minitest::Test
       # Time.new rejects them. session_id_from is unaffected — it is
       # started_at_for specifically that must fall back to stat.birthtime.
       bad_session = sessions.find { |s| s.path.end_with?(bad_filename) }
-      assert_equal base_started_at(bad_session), bad_session.started_at,
-                   "expected started_at_for's rescue to fall back to Base's answer"
+      assert_optional_equal base_started_at(bad_session), bad_session.started_at,
+                            "expected started_at_for's rescue to fall back to Base's answer"
     end
   end
 

@@ -2,6 +2,8 @@
 
 Where do AI coding agents store their session logs? This gem knows.
 
+![agent-sessions demo](demo.gif)
+
 Resolves session store paths for Claude Code, Codex CLI, Cursor (CLI and IDE), Amp CLI, opencode, pi, Gemini CLI, GitHub Copilot CLI, Qwen Code, and Grok Build. Verifies those paths against disk. Audits whether plaintext transcripts sit inside anything that syncs.
 
 Read-only by design. Runtime dependencies: `agent_homedir` and `zeitwerk`.
@@ -61,6 +63,8 @@ Use the bare name in CLI arguments and the symbol in Ruby calls:
 Ruby callers passing any other symbol get `Agent::Sessions::UnknownAgent`; its message lists the valid names. The CLI catches that error, prints its message, and exits with status 1.
 
 ## Ruby API
+
+![agent_sessions Ruby API demo](demo-ruby.gif)
 
 Browse the [generated API documentation](https://github.com/lucianghinda/agent_sessions/blob/main/doc/Agent/Sessions.md) or the consolidated [`llm.txt`](https://github.com/lucianghinda/agent_sessions/blob/main/llm.txt) reference.
 

@@ -18,7 +18,6 @@ class PackagingTest < Minitest::Test
     agent_sessions.gemspec
     bin
     doc
-    docs
     exe
     lib
     llm.txt
@@ -112,7 +111,6 @@ class PackagingTest < Minitest::Test
       assert File.file?(File.join(copy_dir, "Gemfile.lock"))
       assert File.file?(File.join(copy_dir, "Rakefile"))
       assert Dir.exist?(File.join(copy_dir, "bin"))
-      assert Dir.exist?(File.join(copy_dir, "docs"))
       assert Dir.exist?(File.join(copy_dir, "test"))
 
       result = build_gem(copy_dir)

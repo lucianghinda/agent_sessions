@@ -164,8 +164,8 @@ module AdapterConformance
 
       bad = sessions.find { |s| File.basename(s.path) == malformed_date_filename }
       refute_nil bad, "expected a session for #{malformed_date_filename.inspect}"
-      assert_equal base_started_at(bad), bad.started_at,
-                   "expected started_at_for's rescue to fall back to Base's answer"
+      assert_optional_equal base_started_at(bad), bad.started_at,
+                            "expected started_at_for's rescue to fall back to Base's answer"
     end
   end
 
@@ -181,7 +181,7 @@ module AdapterConformance
       unmatched = sessions.find { |s| File.basename(s.path) == unmatched_filename }
       refute_nil unmatched, "expected a session for #{unmatched_filename.inspect}"
       assert_equal File.basename(unmatched_filename, ".*"), unmatched.id
-      assert_equal base_started_at(unmatched), unmatched.started_at
+      assert_optional_equal base_started_at(unmatched), unmatched.started_at
     end
   end
 

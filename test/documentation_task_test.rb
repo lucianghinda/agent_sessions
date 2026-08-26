@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "test_helper"
-require "bundler"
 require "open3"
 require "rbconfig"
 
@@ -39,9 +38,18 @@ class DocumentationTaskTest < Minitest::Test
   private
 
   def run_yard_task(copy_dir)
-    Bundler.with_unbundled_env do
-      Open3.capture3(RbConfig.ruby, "-S", "bundle", "exec", "rake", "yard", chdir: copy_dir)
-    end
+    gemfile = File.expand_path("../Gemfile", __dir__)
+
+    Open3.capture3(
+      {"BUNDLE_GEMFILE" => gemfile},
+      RbConfig.ruby,
+      "-S",
+      "bundle",
+      "exec",
+      "rake",
+      "yard",
+      chdir: copy_dir
+    )
   end
 
   def with_project_copy

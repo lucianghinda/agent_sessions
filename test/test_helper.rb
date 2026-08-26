@@ -32,6 +32,12 @@ module FixtureHelpers
     File.write(path, content)
     path
   end
+
+  def assert_optional_equal(expected, actual, message = nil)
+    return assert_nil(actual, message) if expected.nil?
+
+    assert_equal expected, actual, message
+  end
 end
 
 require_relative "support/adapter_conformance"

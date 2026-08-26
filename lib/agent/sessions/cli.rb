@@ -268,7 +268,7 @@ module Agent
 
         # One agent's missing dependency or unreadable store must not silently empty
         # a cross-agent listing — each skip is announced on stderr, tracked in
-        # @skipped_agents so the command can exit non-zero, and the rest still
+        # `@skipped_agents` so the command can exit non-zero, and the rest still
         # print. The exit code matters as much as the stderr line: `--json` is the
         # door built for a machine consumer (design doc section 12), and a machine
         # reading `[]` next to exit 0 has no way to tell "empty store" from
@@ -335,7 +335,7 @@ module Agent
         # a skip must flip the exit code even though the rest of the output still
         # printed successfully. One list, not a list plus a boolean that mirrors
         # it: two variables recording the same fact (an earlier draft had
-        # @agents_skipped alongside @skipped_agents) are one rename away from
+        # `@agents_skipped` alongside `@skipped_agents`) are one rename away from
         # silently disagreeing, which is exactly the failure mode decision 11a
         # exists to prevent.
         def exit_code_honoring_skips

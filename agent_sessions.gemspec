@@ -16,11 +16,16 @@ Gem::Specification.new do |spec|
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.2.0"
 
-  spec.metadata["homepage_uri"] = spec.homepage
+  spec.metadata["source_code_uri"] = spec.homepage
+  spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata["rubygems_mfa_required"] = "true"
 
-  spec.files = Dir["*.{md,txt}", "{lib,exe}/**/*"]
+  spec.files = Dir.chdir(__dir__) do
+    (%w[CHANGELOG.md LICENSE.txt README.md llm.txt] +
+      Dir.glob("{lib,exe}/**/*").select { |path| File.file?(path) } +
+      Dir.glob("doc/**/*.{csv,md}").select { |path| File.file?(path) }).sort
+  end
   spec.bindir = "exe"
   spec.executables = ["agent-sessions"]
   spec.require_paths = ["lib"]

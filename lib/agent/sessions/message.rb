@@ -16,8 +16,6 @@ module Agent
           # session-level `usage` is where those formats answer. A nil here means
           # "not recorded on this message", never "zero tokens".
           Message = Data.define(:role, :at, :parts, :raw, :usage, :model) do
-            self::ROLES = %i[user assistant system tool unknown].freeze
-
             def initialize(role:, at:, parts:, raw:, usage: nil, model: nil)
               roles = self.class::ROLES
               raise ArgumentError, "role #{role.inspect} must be one of #{roles.join(", ")}" unless roles.include?(role)
@@ -32,5 +30,6 @@ module Agent
               parts.select { |part| part.type == :text }.map(&:text).join
             end
           end
+          Message::ROLES = %i[user assistant system tool unknown].freeze
   end
 end

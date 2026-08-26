@@ -1,0 +1,12 @@
+--markup markdown
+--format markdown
+--output-dir doc
+--no-cache
+--title "Agent::Sessions"
+--protected
+--no-private
+--plugin markdown
+--exclude '^docs/'
+lib/**/*.rb
+-
+README.md

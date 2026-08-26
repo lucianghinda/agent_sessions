@@ -115,12 +115,12 @@ module Agent
             # (`@project_path_resolver = nil`) on a Session's FIRST #project_path
             # call, not before — so any Session a caller keeps without ever reading
             # project_path stays holding a live reference to the whole adapter,
-            # @meta included. `list` is exactly that caller: it never touches
+            # `@meta` included. `list` is exactly that caller: it never touches
             # project_path, so every Session it returns keeps this adapter (and
-            # whatever of @meta got populated enumerating them) alive for as long
+            # whatever of `@meta` got populated enumerating them) alive for as long
             # as the caller holds that Session array — not just for one
             # enumeration pass. All N sessions from one `sessions` call share the
-            # SAME adapter instance, so this is one retained @meta hash, not N
+            # SAME adapter instance, so this is one retained `@meta` hash, not N
             # copies of it.
             #
             # What actually keeps this acceptable is SIZE, not lifetime: measured

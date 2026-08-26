@@ -9,6 +9,16 @@
 module AdapterConformance
   include FixtureHelpers
 
+  @test_classes = []
+
+  class << self
+    attr_reader :test_classes
+
+    def included(test_class)
+      test_classes << test_class unless test_classes.include?(test_class)
+    end
+  end
+
   def test_conformance_is_registered
     assert_equal adapter_class, Agent::Sessions.registry[adapter_class.agent_name]
   end
@@ -54,11 +64,12 @@ module AdapterConformance
   end
 
   # --- Layer 2 conformance ---------------------------------------------------
-  # Opt in by additionally defining:
+  # Every shipped adapter test must additionally define:
   #   expected_session_id     -> id of the single session build_fixture creates
   #   expected_project_path   -> the project recorded in that fixture, or nil
   #                              when the agent genuinely cannot know it
-  # Tests skip when these are absent, so Layer-1-only adapters stay green.
+  # Missing declarations fail in that adapter's own test file, so conformance
+  # coverage remains enforceable when test files run independently.
 
   def test_conformance_sessions_are_lazy
     with_home do |_home, env|
@@ -73,7 +84,7 @@ module AdapterConformance
   end
 
   def test_conformance_enumerates_exactly_the_fixture_session
-    skip_unless_layer2
+    assert_layer2_contract
     with_home do |home, env|
       build_fixture(home)
       sessions = adapter_class.new(env: env).sessions.force
@@ -87,7 +98,7 @@ module AdapterConformance
   end
 
   def test_conformance_project_path_matches_the_fixture
-    skip_unless_layer2
+    assert_layer2_contract
     with_home do |home, env|
       build_fixture(home)
       session = adapter_class.new(env: env).sessions.first
@@ -100,7 +111,7 @@ module AdapterConformance
   end
 
   def test_conformance_for_project_round_trips
-    skip_unless_layer2
+    assert_layer2_contract
     skip "#{adapter_class.agent_name} cannot know its project paths" if expected_project_path.nil?
 
     with_home do |home, env|
@@ -113,7 +124,7 @@ module AdapterConformance
   end
 
   def test_conformance_project_paths_lists_the_fixture_project
-    skip_unless_layer2
+    assert_layer2_contract
     skip "#{adapter_class.agent_name} cannot know its project paths" if expected_project_path.nil?
 
     with_home do |home, env|
@@ -176,10 +187,10 @@ module AdapterConformance
 
   private
 
-  def skip_unless_layer2
-    return if respond_to?(:expected_session_id, true)
+  def assert_layer2_contract
+    missing = %i[expected_session_id expected_project_path].reject { |name| respond_to?(name, true) }
 
-    skip "define expected_session_id and expected_project_path for Layer 2 conformance"
+    assert_empty missing, "#{adapter_class.agent_name} must define #{missing.join(" and ")} for Layer 2 conformance"
   end
 
   # A stricter version could `flunk` instead of `skip` when the adapter

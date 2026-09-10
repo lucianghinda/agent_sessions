@@ -64,6 +64,7 @@ class PackagingTest < Minitest::Test
     lib/agent/sessions/readers/opencode.rb
     lib/agent/sessions/readers/pi.rb
     lib/agent/sessions/readers/qwen.rb
+    lib/agent/sessions/round_trip.rb
     lib/agent/sessions/session.rb
     lib/agent/sessions/sqlite.rb
     lib/agent/sessions/store.rb

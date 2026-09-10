@@ -47,6 +47,29 @@ every message to get them.
 Streams. Yields each message as it is parsed; a caller that breaks after one
 has read one record, not the file.
 
+### `each_round_trip()` <a id="method-i-each_round_trip"></a> <a id="each_round_trip-instance_method"></a>
+Streams, exactly as each_message does. A group is a RUN of neighbouring
+records sharing one round-trip id, not every record sharing that id wherever
+it sits in the file — collecting scattered records cannot stream, and rule 3
+says no code path here may assume a file fits in memory.
+
+So an id that reappears after its run closed opens a NEW round trip rather
+than reopening the old one. That is ORDINARY for Claude, not an anomaly:
+Claude Code writes each tool_result immediately after the tool_use it answers,
+while every content block of the one API response keeps the same message.id,
+so a response making two tool calls has its records split by the result in
+between. Measured over the 60 most recent real Claude transcripts on this
+machine (2026-09-10): 3,315 distinct message.ids, 261 of them (7.9%) split
+across more than one run, in 33 of the 60 files; 759 of the splits are a
+tool_result record, 66 a last-prompt, 12 a file-history-delta.
+
+Hence the warning fires only where NOTHING answered a tool between the two
+runs — the case that is genuinely unexplained and would mean the format
+drifted. Warning on the benign split would put four or five lines under every
+real session's loop view, which teaches a caller that these warnings are
+noise.
+- **@yield** [build_round_trip(index + 1, open_messages, open_id)]
+
 ### `fidelity()` <a id="method-i-fidelity"></a> <a id="fidelity-instance_method"></a>
 Not documented.
 
@@ -61,6 +84,14 @@ what a 2.6 GB file requires.
 ### `partial?()` <a id="method-i-partial-3F"></a> <a id="partial?-instance_method"></a>
 True where the local file is not the whole story — Amp, whose server holds the
 canonical copy. Overridden there, false everywhere else.
+- **@return** [Boolean]
+
+### `round_trips()` <a id="method-i-round_trips"></a> <a id="round_trips-instance_method"></a>
+Not documented.
+
+### `round_trips_recorded?()` <a id="method-i-round_trips_recorded-3F"></a> <a id="round_trips_recorded?-instance_method"></a>
+False here: most stores are an append-only list of records and no format names
+which of them belong to one model response.
 - **@return** [Boolean]
 
 ### `tree()` <a id="method-i-tree"></a> <a id="tree-instance_method"></a>

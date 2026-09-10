@@ -50,6 +50,7 @@ class PackagingTest < Minitest::Test
     lib/agent/sessions/error.rb
     lib/agent/sessions/home_expansion.rb
     lib/agent/sessions/location.rb
+    lib/agent/sessions/loop.rb
     lib/agent/sessions/message.rb
     lib/agent/sessions/missing_dependency.rb
     lib/agent/sessions/node.rb

@@ -341,6 +341,152 @@ class ClaudeReaderTest < Minitest::Test
     end
   end
 
+  # Grouping per record would answer three round trips here — the bug this
+  # feature fixes. One API response streams into one record per content
+  # block, all three sharing one message.id, so it must group to one.
+  def test_records_of_one_model_answer_become_one_round_trip
+    records = [billed_turn(id: "msg_1", input: 10, output: 5),
+               billed_turn(id: "msg_1", input: 10, output: 5),
+               billed_turn(id: "msg_1", input: 10, output: 5)]
+    with_session(records) do |reader|
+      round_trips = reader.round_trips
+      assert_equal 1, round_trips.size
+      assert_equal 3, round_trips.first.messages.size
+      assert round_trips.first.recorded
+    end
+  end
+
+  def test_claude_reports_that_round_trip_grouping_is_recorded
+    with_session([user_turn("hi")]) { |reader| assert reader.round_trips_recorded? }
+  end
+
+  # each_round_trip must stream: reaching round trip 1 must not require
+  # parsing every one of 50 records. A subclass that counts calls to the
+  # private message_for proves it directly, rather than trusting that a
+  # fast test means little work happened.
+  def test_round_trips_stream
+    records = Array.new(50) { |i| billed_turn(id: "msg_#{i}", input: 1, output: 1) }
+    with_session(records) do |reader|
+      assert_kind_of Enumerator, reader.each_round_trip
+
+      counting_reader = CountingReader.new(reader.session)
+      first_round_trip = counting_reader.each_round_trip.first
+      refute_nil first_round_trip
+      assert_operator counting_reader.message_for_calls, :<, 50
+    end
+  end
+
+  # Summing per record roughly doubles the bill: Claude repeats one API
+  # response's usage byte-for-byte on every record of that response.
+  def test_round_trip_usage_is_counted_once_per_model_answer
+    records = [billed_turn(id: "msg_1", input: 10, output: 5),
+               billed_turn(id: "msg_1", input: 10, output: 5),
+               billed_turn(id: "msg_1", input: 10, output: 5)]
+    with_session(records) do |reader|
+      usage = reader.round_trips.first.usage
+      assert_equal 10, usage.input
+      assert_equal 5, usage.output
+    end
+  end
+
+  # Nothing answers a tool between the two A runs, so the reappearance has no
+  # explanation this reader knows and is worth a line.
+  def test_a_round_trip_id_that_reappears_unexplained_opens_a_new_group_and_warns
+    records = [billed_turn(id: "A-id-value", input: 1, output: 1),
+               billed_turn(id: "B-id-value", input: 1, output: 1),
+               billed_turn(id: "A-id-value", input: 1, output: 1)]
+    with_session(records) do |reader|
+      assert_equal 3, reader.round_trips.size
+      assert(reader.warnings.any? { |w| w.include?("A-id-value") })
+    end
+  end
+
+  # The same reappearance, with the tool answer that explains it. Claude Code
+  # writes each tool_result immediately after the tool_use it answers while
+  # every content block of the one response keeps its message.id, so a response
+  # making two calls is split by the result in between. Measured over the 60
+  # most recent real transcripts on this machine (2026-09-10): 261 of 3,315
+  # message.ids are split this way, across 33 of the 60 files. Warning on it
+  # would put four or five lines under every real session's loop view, so this
+  # pins the silence as deliberately as the case above pins the warning.
+  def test_a_round_trip_id_split_by_a_tool_answer_opens_a_new_group_in_silence
+    call = assistant_parts([{ type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/tmp/x" } }])
+    call[:message][:id] = "A-id-value"
+    answer = user_parts([{ type: "tool_result", tool_use_id: "toolu_1", content: "file contents" }])
+    rest = assistant_parts([{ type: "text", text: "done" }])
+    rest[:message][:id] = "A-id-value"
+
+    with_session([call, answer, rest]) do |reader|
+      assert_equal 3, reader.round_trips.size, "the run is still split; only the warning changes"
+      assert_empty reader.warnings.grep(/reappears/),
+                   "a split explained by a tool answer must not be reported as unexplained"
+    end
+  end
+
+  def test_a_group_whose_records_disagree_on_usage_reports_the_first_and_says_so
+    records = [billed_turn(id: "msg_1", input: 10, output: 5),
+               billed_turn(id: "msg_1", input: 99, output: 99)]
+    with_session(records) do |reader|
+      usage = reader.round_trips.first.usage
+      assert_equal 10, usage.input
+      assert_equal 5, usage.output
+      assert(reader.warnings.any? { |w| w.include?("disagree") })
+    end
+  end
+
+  # Pins the honest fallback inside a format that otherwise records ids: a
+  # user turn carries no message.id, so it stays its own assumed round trip
+  # even though the assistant turn beside it is a recorded one.
+  def test_a_claude_user_turn_is_its_own_assumed_round_trip
+    with_session([user_turn("hello"), billed_turn(id: "msg_1", input: 1, output: 1)]) do |reader|
+      user_round_trip, assistant_round_trip = reader.round_trips
+      assert_equal 2, reader.round_trips.size
+      refute user_round_trip.recorded
+      assert assistant_round_trip.recorded
+    end
+  end
+
+  # RoundTrip's own readers, over messages a real transcript would produce
+  # for one turn each. Parts and calls read across every message the group
+  # holds, in the order the file wrote them; roles reports who actually
+  # spoke in that group.
+  def test_round_trip_readers_expose_parts_calls_and_roles
+    parts = [{ type: "thinking", thinking: "let me check" },
+             { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/tmp/x" } }]
+    result = [{ type: "tool_result", tool_use_id: "toolu_1", content: "file contents" }]
+
+    with_session([assistant_parts(parts), user_parts(result)]) do |reader|
+      call_round_trip, result_round_trip = reader.round_trips
+
+      assert_equal %i[thinking tool_use], call_round_trip.parts.map(&:type)
+      assert_equal ["Read"], call_round_trip.calls.map(&:name)
+      assert_equal [:assistant], call_round_trip.roles
+
+      assert_equal [:tool_result], result_round_trip.parts.map(&:type)
+      assert_empty result_round_trip.calls
+      assert_equal [:user], result_round_trip.roles
+    end
+  end
+
+  # Counts calls to the private message_for so test_round_trips_stream can
+  # prove each_round_trip yields before the file is exhausted, rather than
+  # just trusting that a fast test means little work happened.
+  class CountingReader < Agent::Sessions::Readers::Claude
+    attr_reader :message_for_calls
+
+    def initialize(session, **rest)
+      super
+      @message_for_calls = 0
+    end
+
+    private
+
+    def message_for(record, line_number)
+      @message_for_calls += 1
+      super
+    end
+  end
+
   private
 
   # --- reader conformance fixtures ---

@@ -12,7 +12,25 @@ module Agent
           # `warnings` is the reader's warnings first, then this object's own, so
           # the order is deterministic regardless of what the reader happened to
           # find.
-          Loop = Data.define(:session, :round_trips, :tool_calls, :speakers, :recorded, :warnings) do
+          Loop = Data.define(:session, :round_trips, :tool_calls, :speakers, :ending, :recorded, :warnings) do
+            # The exact sentence for each ending, so the Loop and whatever renders
+            # it say the same words.
+            ENDINGS = {
+              answered: "the model answered without asking for a tool",
+              stopped_in_the_loop: "a tool was asked for and nothing answered it",
+              not_a_model_record: "the session stops on a record the model did not write",
+              empty: "no round trips were recorded"
+            }.freeze
+
+            # Always true: no store on disk records WHY a session stopped — the
+            # on-disk transcript holds no stop reason and no turn count, because
+            # those live in the streamed output of a non-interactive run, not in
+            # the session file. So the ending is always deduced, and must always
+            # be labelled as such rather than presented as a recorded fact.
+            def ending_inferred? = true
+
+            def ending_detail = ENDINGS.fetch(ending)
+
             class << self
               # Reads the WHOLE session and says so by returning one built object
               # rather than streaming — it cannot stream, because a tool result
@@ -27,7 +45,7 @@ module Agent
                 trips.each { |trip| speakers[trip.index] = speaker_of(trip, warnings) }
                 calls = pair(trips, warnings)
                 new(session: reader.session, round_trips: trips, tool_calls: calls, speakers: speakers,
-                    recorded: trips.any? && trips.all?(&:recorded),
+                    ending: ending_for(trips, speakers), recorded: trips.any? && trips.all?(&:recorded),
                     warnings: reader.warnings + warnings)
               end
 
@@ -88,6 +106,15 @@ module Agent
                 calls
               end
 
+              def ending_for(round_trips, speakers)
+                return :empty if round_trips.empty?
+
+                last = round_trips.last
+                return :not_a_model_record unless speakers[last.index] == :model
+                return :stopped_in_the_loop if last.calls.any?
+
+                :answered
+              end
             end
           end
   end

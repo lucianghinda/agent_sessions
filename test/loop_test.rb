@@ -50,11 +50,41 @@ class LoopTest < Minitest::Test
     end
   end
 
+  def test_the_ending_says_the_session_stopped_inside_the_loop
+    call = { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/tmp/x" } }
+    with_session([user_turn("read the file"), assistant_parts([call])]) do |reader|
+      loop = Agent::Sessions::Loop.for(reader)
+
+      assert_equal :stopped_in_the_loop, loop.ending
+      assert loop.ending_inferred?
+      assert_equal "a tool was asked for and nothing answered it", loop.ending_detail
+    end
+  end
+
+  def test_the_ending_says_the_model_answered
+    with_session([user_turn("hi"), assistant_turn("hello there")]) do |reader|
+      loop = Agent::Sessions::Loop.for(reader)
+
+      assert_equal :answered, loop.ending
+      assert_equal "the model answered without asking for a tool", loop.ending_detail
+    end
+  end
+
+  def test_the_ending_says_the_session_stops_on_a_record_the_model_did_not_write
+    with_session([assistant_turn("hello there"), user_turn("thanks")]) do |reader|
+      loop = Agent::Sessions::Loop.for(reader)
+
+      assert_equal :not_a_model_record, loop.ending
+      assert_equal "the session stops on a record the model did not write", loop.ending_detail
+    end
+  end
+
   def test_a_broken_store_renders_empty_and_warns
     conformance_broken do |reader|
       loop = Agent::Sessions::Loop.for(reader)
 
       assert_empty loop.round_trips
+      assert_equal :empty, loop.ending
       refute loop.recorded
       refute_empty loop.warnings
     end
@@ -99,6 +129,7 @@ class LoopTest < Minitest::Test
       write("", home, ".claude", "projects", PROJECT, "#{SESSION}.jsonl")
       loop = Agent::Sessions::Loop.for(read_session(env))
 
+      assert_equal :empty, loop.ending
       refute loop.recorded
     end
   end

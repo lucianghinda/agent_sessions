@@ -122,6 +122,22 @@ reader.usage&.input                           # disjoint buckets: input, output,
 
 `Session#bytes` is what that session occupies on disk, not just its transcript. Claude Code writes a sidecar directory beside each transcript — `<id>/subagents/`, `<id>/tool-results/` — and those bytes belong to the session that produced them, which is why `du` and `audit` agree on the same store.
 
+### Round trips
+
+A round trip is one model response, however many records the store split it across:
+
+```ruby
+reader.round_trips                     # eager: an Array of RoundTrip
+reader.each_round_trip { |trip| ... }  # streams; breaking early reads one group, not the file
+reader.round_trips_recorded?           # true only where the store names its own groups
+```
+
+A `RoundTrip` carries `index`, `messages`, `usage`, and `recorded`, and derives `parts` (every part, in file order), `calls` (its `:tool_use` parts), and `roles` (the distinct roles seen, first-seen order).
+
+Claude names its groups (`message.id`); every other reader falls back to one round trip per message, and `round_trips_recorded?` answers `false` there — "not recorded" must never read as "none".
+
+Pairing a call with the result that answers it, and rendering a session as a loop, live in the sibling [`agent_session_context`](https://github.com/lucianghinda/agent_session_context) gem, via its `agent-session-context loop` command.
+
 ### Errors
 
 Every domain-specific error the gem raises descends from `Agent::Sessions::Error`:

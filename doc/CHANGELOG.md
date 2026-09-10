@@ -1,3 +1,11 @@
+## 0.4.0 (2026-09-10)
+
+- Round-trip grouping in every reader: `RoundTrip` (`index`, `messages`, `usage`, `recorded`, plus `parts`, `calls`, `roles`), `reader.each_round_trip` (streams), `reader.round_trips` (eager), `reader.round_trips_recorded?`
+- Claude names its round-trip id — `message.id`, the id Anthropic's API gives one response — and is the only reader today where `round_trips_recorded?` answers true; every other reader falls back to one round trip per message
+- The reappearing-id warning fires only when nothing explains the split. Measured over the 60 most recent real Claude transcripts (2026-09-10): 3,315 distinct message ids, 261 of them (7.9%) split across more than one run in 33 of the 60 files; 759 of those splits are a tool_result record, 66 a last-prompt, 12 a file-history-delta — all benign, so warning on them would put four or five lines under every real session
+- Conformance suite case C9: `round_trips` must never lose or duplicate a message, across every reader
+- The loop view (`Loop`, `ToolCall`, `LoopView`) and its CLI command (`show`) moved to the `agent_session_context` gem before release, so they never shipped here
+
 ## 0.3.1 (2026-08-26)
 
 - Add tracked Markdown YARD documentation and a consolidated `llm.txt`, package both with the gem, and validate every local documentation link

@@ -50,8 +50,6 @@ class PackagingTest < Minitest::Test
     lib/agent/sessions/error.rb
     lib/agent/sessions/home_expansion.rb
     lib/agent/sessions/location.rb
-    lib/agent/sessions/loop.rb
-    lib/agent/sessions/loop_view.rb
     lib/agent/sessions/message.rb
     lib/agent/sessions/missing_dependency.rb
     lib/agent/sessions/node.rb
@@ -70,7 +68,6 @@ class PackagingTest < Minitest::Test
     lib/agent/sessions/session.rb
     lib/agent/sessions/sqlite.rb
     lib/agent/sessions/store.rb
-    lib/agent/sessions/tool_call.rb
     lib/agent/sessions/unknown_agent.rb
     lib/agent/sessions/unreadable_store.rb
     lib/agent/sessions/unsupported_format.rb
@@ -83,7 +80,7 @@ class PackagingTest < Minitest::Test
     spec = specification
 
     assert_equal "agent_sessions", spec.name
-    assert_equal "0.3.1", spec.version.to_s
+    assert_equal "0.4.0", spec.version.to_s
     assert_equal "Locate, verify, and read AI coding agent session logs", spec.summary
     assert_equal "MIT", spec.license
     assert_equal "https://github.com/lucianghinda/agent_sessions", spec.homepage
@@ -100,7 +97,7 @@ class PackagingTest < Minitest::Test
   end
 
   def test_current_release_is_documented
-    assert_includes File.read(File.expand_path("../CHANGELOG.md", __dir__)), "## 0.3.1 (2026-08-26)"
+    assert_includes File.read(File.expand_path("../CHANGELOG.md", __dir__)), "## 0.4.0 (2026-09-10)"
   end
 
   def test_release_artifacts_are_ignored
@@ -194,7 +191,7 @@ class PackagingTest < Minitest::Test
       stdout, stderr, status = run_isolated_cli(gem_home, "version")
 
       assert status.success?, "expected installed CLI to run, stderr: #{stderr.inspect}, stdout: #{stdout.inspect}"
-      assert_equal "0.3.1\n", stdout
+      assert_equal "0.4.0\n", stdout
       assert_empty stderr
     end
   end

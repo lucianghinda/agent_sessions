@@ -12,7 +12,7 @@ module Agent
           # `warnings` is the reader's warnings first, then this object's own, so
           # the order is deterministic regardless of what the reader happened to
           # find.
-          Loop = Data.define(:session, :round_trips, :speakers, :recorded, :warnings) do
+          Loop = Data.define(:session, :round_trips, :tool_calls, :speakers, :recorded, :warnings) do
             class << self
               # Reads the WHOLE session and says so by returning one built object
               # rather than streaming — it cannot stream, because a tool result
@@ -25,7 +25,8 @@ module Agent
                 trips = reader.round_trips
                 speakers = {}
                 trips.each { |trip| speakers[trip.index] = speaker_of(trip, warnings) }
-                new(session: reader.session, round_trips: trips, speakers: speakers,
+                calls = pair(trips, warnings)
+                new(session: reader.session, round_trips: trips, tool_calls: calls, speakers: speakers,
                     recorded: trips.any? && trips.all?(&:recorded),
                     warnings: reader.warnings + warnings)
               end
@@ -50,6 +51,41 @@ module Agent
 
                 warnings << "round trip #{round_trip.index} mixes a tool result with other parts" if results.size < parts.size
                 :harness
+              end
+
+              # Pairs each call with the result that answers it, by call id —
+              # never by position, since two calls can be in flight at once and
+              # position would match the wrong one.
+              #
+              # Gemini and opencode record a call and its result in ONE message,
+              # so there answered_in == asked_in; the same call-id pairing covers
+              # it without a special case.
+              def pair(round_trips, warnings)
+                results = {}
+                round_trips.each do |trip|
+                  trip.parts.each do |part|
+                    next unless part.type == :tool_result && part.call_id # a nil call_id cannot be paired and must not collide with another nil
+
+                    results[part.call_id] = [trip.index, part]
+                  end
+                end
+
+                calls = round_trips.flat_map do |trip|
+                  trip.calls.map do |part|
+                    # results.delete returns nil when absent, and destructuring nil
+                    # gives both index and answer as nil — that is intended, and is
+                    # exactly an unanswered call.
+                    pair = part.call_id ? results.delete(part.call_id) : nil
+                    index, answer = pair
+                    ToolCall.new(name: part.name.to_s, call_id: part.call_id,
+                                 input_bytes: part.text.to_s.bytesize,
+                                 result_bytes: answer && answer.text.to_s.bytesize,
+                                 asked_in: trip.index, answered_in: index)
+                  end
+                end
+
+                results.each_key { |id| warnings << "tool result #{id} answers no call" }
+                calls
               end
 
             end

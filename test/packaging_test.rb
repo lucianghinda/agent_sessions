@@ -69,6 +69,7 @@ class PackagingTest < Minitest::Test
     lib/agent/sessions/session.rb
     lib/agent/sessions/sqlite.rb
     lib/agent/sessions/store.rb
+    lib/agent/sessions/tool_call.rb
     lib/agent/sessions/unknown_agent.rb
     lib/agent/sessions/unreadable_store.rb
     lib/agent/sessions/unsupported_format.rb

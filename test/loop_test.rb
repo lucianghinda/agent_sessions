@@ -5,6 +5,51 @@ require_relative "test_helper"
 class LoopTest < Minitest::Test
   include FixtureHelpers
 
+  # Pairing must go by call id: two calls can be in flight at once, and
+  # pairing by position would match the wrong call to the wrong result.
+  def test_a_call_is_paired_with_the_result_that_answered_it
+    call = { type: "tool_use", id: "toolu_1", name: "Read", input: { file_path: "/tmp/x" } }
+    result = { type: "tool_result", tool_use_id: "toolu_1", content: "file contents" }
+
+    with_session([assistant_parts([call]), user_parts([result])]) do |reader|
+      loop = Agent::Sessions::Loop.for(reader)
+
+      assert_equal 1, loop.tool_calls.size
+      tool_call = loop.tool_calls.first
+      assert_equal "Read", tool_call.name
+      assert_equal "toolu_1", tool_call.call_id
+      assert tool_call.answered?
+      assert_equal "file contents".bytesize, tool_call.result_bytes
+      assert_operator tool_call.answered_in, :>, tool_call.asked_in
+    end
+  end
+
+  # A call nothing answers must report NO result, never a 0-byte one — 0 would
+  # claim an empty answer was recorded when nothing was recorded at all.
+  def test_a_call_nothing_answered_reports_no_result_rather_than_an_empty_one
+    call = { type: "tool_use", id: "toolu_9", name: "Bash", input: { command: "ls" } }
+
+    with_session([assistant_parts([call])]) do |reader|
+      loop = Agent::Sessions::Loop.for(reader)
+      tool_call = loop.tool_calls.first
+
+      refute tool_call.answered?
+      assert_nil tool_call.result_bytes
+      assert_nil tool_call.answered_in
+    end
+  end
+
+  def test_a_result_answering_no_call_is_reported_and_rendered_nowhere
+    result = { type: "tool_result", tool_use_id: "toolu_x", content: "orphan" }
+
+    with_session([user_parts([result])]) do |reader|
+      loop = Agent::Sessions::Loop.for(reader)
+
+      assert_empty loop.tool_calls
+      assert(loop.warnings.any? { |w| w.include?("toolu_x") })
+    end
+  end
+
   def test_a_broken_store_renders_empty_and_warns
     conformance_broken do |reader|
       loop = Agent::Sessions::Loop.for(reader)

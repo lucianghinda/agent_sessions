@@ -22,6 +22,7 @@ module Agent
           case command
           when "where" then where
           when "list" then list
+          when "show" then show
           when "du" then du
           when "doctor" then doctor
           when "audit" then audit
@@ -107,6 +108,51 @@ module Agent
           exit_code_honoring_skips
         end
 
+        # Takes a UID (agent:id), not a bare id: two agents can record the same
+        # id, so Session#uid — the collision-free key the gem already offers —
+        # is the only name that picks exactly one session. Prints sizes, never
+        # bodies (LoopView's own rule), so its output is safe to paste anywhere.
+        def show
+          options = { format: "ascii" }
+          OptionParser.new do |opts|
+            opts.banner = "Usage: agent-sessions show AGENT:ID [--format ascii|md|json]"
+            opts.on("--format KIND", "ascii (default), md, or json") do |value|
+              raise Error, "invalid --format #{value.inspect} (use ascii, md, or json)" unless %w[ascii md json].include?(value)
+
+              options[:format] = value
+            end
+          end.permute!(@argv)
+
+          uid = @argv.shift
+          raise Error, "show: expected a session uid, as agent:id (for example claude:018f2a7c)" if uid.nil?
+          unless @argv.empty?
+            raise Error, "show: unexpected argument #{@argv.first.inspect} (this command takes one uid)"
+          end
+
+          # Naming the form is not enough on its own: the mistake this refuses is
+          # almost always a bare id copied out of `list`, so the message shows
+          # that id already in the shape it wants. It only does that when the
+          # argument carries no colon — echoing one back into the example turns
+          # "claude:" into "claude:claude:", which reads as a second mistake.
+          agent, colon, id = uid.partition(":")
+          if id.empty? || agent.empty?
+            example = colon.empty? ? "claude:#{uid}" : "claude:018f2a7c"
+            raise Error, "show: #{uid.inspect} is not a session uid; use the agent:id form " \
+                         "(for example #{example})"
+          end
+
+          session = Agent::Sessions.sessions(agent.to_sym, env: @env).find { |candidate| candidate.id == id }
+          raise Error, "no #{agent} session with id #{id}" unless session
+
+          view = LoopView.new(Loop.for(Agent::Sessions.read(session)))
+          case options[:format]
+          when "json" then @stdout.puts JSON.pretty_generate(jsonable(view.to_h))
+          when "md"   then @stdout.print view.markdown
+          else             @stdout.print view.ascii
+          end
+          0
+        end
+
         def du
           options = { json: false, by: "agent" }
           OptionParser.new do |opts|
@@ -190,6 +236,7 @@ module Agent
             Commands:
               where [AGENT]    resolved paths, env overrides, format, retention
               list             sessions, newest first (--agent, --project, --since)
+              show UID         one session as the agent loop (--format ascii|md|json)
               du               session disk usage (--by agent|project)
               doctor [AGENT]   verify on-disk layout against the adapter's claims
               audit            bytes per store and sync/backup exposure
@@ -197,6 +244,7 @@ module Agent
 
             Options:
               --json           machine-readable output (where, list, du, doctor, audit)
+              --format KIND    ascii (default), md, or json (show)
           USAGE
           status
         end

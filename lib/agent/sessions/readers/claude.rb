@@ -52,6 +52,8 @@ module Agent
             # trustworthy enough to build a tree from.
             def branching? = true
 
+            def round_trips_recorded? = true
+
             def initialize(session, resolve_spills: true, **rest)
               super(session, **rest)
               @resolve_spills = resolve_spills
@@ -111,6 +113,14 @@ module Agent
 
             def node_id_for(record) = record["uuid"]
             def parent_id_for(record) = record["parentUuid"]
+
+            # message.id is the id Anthropic's API gives one response; Claude
+            # Code writes one record PER CONTENT BLOCK, all repeating it. The
+            # reader already dedups session usage by exactly this id (usage,
+            # above), so the fact is known and only needs exposing. A record
+            # with no message.id (a user turn, an event) yields nil and becomes
+            # its own assumed round trip.
+            def round_trip_id_for(record) = record.dig("message", "id")
 
             def message_for(record, line_number)
               type = record["type"]

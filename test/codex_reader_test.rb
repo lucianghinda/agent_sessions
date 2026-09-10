@@ -292,6 +292,19 @@ class CodexReaderTest < Minitest::Test
     end
   end
 
+  # Codex names no round-trip id, so round_trip_id_for stays the base
+  # class's nil default and grouping falls back to one message per round
+  # trip — the honest assumption, never a silent "this session has none".
+  def test_a_format_with_no_round_trip_id_falls_back_to_one_per_message
+    records = [reasoning("considering the options"), tool_call("shell", "call_abc", '{"command":"ls"}')]
+    with_session(records) do |reader|
+      round_trips = reader.round_trips
+      assert_equal 2, round_trips.size
+      round_trips.each { |round_trip| refute round_trip.recorded }
+      refute reader.round_trips_recorded?
+    end
+  end
+
   def test_reader_reports_the_adapter_fidelity_and_is_not_partial
     with_session([user_message("hi")]) do |reader|
       assert_equal :full, reader.fidelity

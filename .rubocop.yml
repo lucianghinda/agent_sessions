@@ -1,0 +1,1 @@
+inherit_gem: { quality_gate: config/ruby.yml }

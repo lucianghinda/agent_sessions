@@ -56,6 +56,9 @@ tree from.
 ### `initialize(session, resolve_spills: true, **rest)` <a id="method-i-initialize"></a> <a id="initialize-instance_method"></a>
 - **@return** [Claude] a new instance of Claude
 
+### `round_trips_recorded?()` <a id="method-i-round_trips_recorded-3F"></a> <a id="round_trips_recorded?-instance_method"></a>
+- **@return** [Boolean]
+
 ### `subagents()` <a id="method-i-subagents"></a> <a id="subagents-instance_method"></a>
 The transcripts of agents this session spawned, as readers of their own.
 Exposed rather than inlined, per design doc 8.1: a subagent's turns are not

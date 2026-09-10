@@ -60,6 +60,75 @@ module Agent
             # `each_message` is what a 2.6 GB file requires.
             def messages = each_message.to_a
 
+            # Streams, exactly as each_message does. A group is a RUN of
+            # neighbouring records sharing one round-trip id, not every record
+            # sharing that id wherever it sits in the file — collecting scattered
+            # records cannot stream, and rule 3 says no code path here may assume
+            # a file fits in memory.
+            #
+            # So an id that reappears after its run closed opens a NEW round trip
+            # rather than reopening the old one. That is ORDINARY for Claude, not
+            # an anomaly: Claude Code writes each tool_result immediately after
+            # the tool_use it answers, while every content block of the one API
+            # response keeps the same message.id, so a response making two tool
+            # calls has its records split by the result in between. Measured over
+            # the 60 most recent real Claude transcripts on this machine
+            # (2026-09-10): 3,315 distinct message.ids, 261 of them (7.9%) split
+            # across more than one run, in 33 of the 60 files; 759 of the splits
+            # are a tool_result record, 66 a last-prompt, 12 a file-history-delta.
+            #
+            # Hence the warning fires only where NOTHING answered a tool between
+            # the two runs — the case that is genuinely unexplained and would mean
+            # the format drifted. Warning on the benign split would put four or
+            # five lines under every real session's loop view, which teaches a
+            # caller that these warnings are noise.
+            def each_round_trip
+              return enum_for(:each_round_trip) unless block_given?
+
+              open_messages = []
+              open_id       = nil
+              closed_ids    = {}
+              answers_seen  = 0
+              index         = 0
+
+              each_message do |message|
+                id = round_trip_id_for(message.raw)
+
+                if id && id == open_id
+                  open_messages << message
+                  answers_seen += 1 if answers_a_tool?(message)
+                  next
+                end
+
+                if open_messages.any?
+                  index += 1
+                  yield build_round_trip(index, open_messages, open_id)
+                end
+                # What this id's run closed at, counted in tool answers seen so
+                # far. Comparing that count against the count now is what
+                # separates "a tool result split one response" from "this id came
+                # back for a reason nothing here explains".
+                closed_ids[open_id] = answers_seen if open_id
+
+                if id && closed_ids[id] == answers_seen
+                  warn_about("round-trip id #{id} reappears after its run closed with no tool answered " \
+                             "in between; grouped as a new round trip")
+                end
+
+                open_messages = [message]
+                open_id       = id
+                answers_seen += 1 if answers_a_tool?(message)
+              end
+
+              yield build_round_trip(index + 1, open_messages, open_id) if open_messages.any?
+            end
+
+            def round_trips = each_round_trip.to_a
+
+            # False here: most stores are an append-only list of records and no
+            # format names which of them belong to one model response.
+            def round_trips_recorded? = false
+
             # Whether this agent records which turn each turn followed. False here:
             # most stores are an append-only list and a tree would have to be invented.
             def branching? = false
@@ -116,6 +185,32 @@ module Agent
             # has to say where its links live, never how to assemble them.
             def node_id_for(_record) = nil
             def parent_id_for(_record) = nil
+
+            # nil means "this format records no round-trip id". Same shape of
+            # hook as node_id_for/parent_id_for: an agent says WHERE its id
+            # lives, never how the grouping is assembled.
+            def round_trip_id_for(_record) = nil
+
+            # Whether this message is a tool answering a call. Used only to tell a
+            # benign split of one response's records from an unexplained one.
+            def answers_a_tool?(message) = message.parts.any? { |part| part.type == :tool_result }
+
+            def build_round_trip(index, messages, id)
+              RoundTrip.new(index: index, messages: messages, usage: usage_for(messages), recorded: !id.nil?)
+            end
+
+            # NEVER a sum. Claude repeats one API response's usage byte-for-byte
+            # on each record of that response (94 of 124 message ids in one real
+            # transcript), so summing the group would report roughly double what
+            # the vendor billed.
+            def usage_for(messages)
+              found = messages.filter_map(&:usage)
+              return nil if found.empty?
+              return found.first if found.uniq.size == 1
+
+              warn_about("round trip records disagree on usage; reporting the first")
+              found.first
+            end
 
             # Two passes over one session. The first records every uuid-bearing
             # record's parent and which of them became messages; the second links

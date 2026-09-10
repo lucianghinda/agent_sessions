@@ -50,6 +50,8 @@ class PackagingTest < Minitest::Test
     lib/agent/sessions/error.rb
     lib/agent/sessions/home_expansion.rb
     lib/agent/sessions/location.rb
+    lib/agent/sessions/loop.rb
+    lib/agent/sessions/loop_view.rb
     lib/agent/sessions/message.rb
     lib/agent/sessions/missing_dependency.rb
     lib/agent/sessions/node.rb
@@ -64,9 +66,11 @@ class PackagingTest < Minitest::Test
     lib/agent/sessions/readers/opencode.rb
     lib/agent/sessions/readers/pi.rb
     lib/agent/sessions/readers/qwen.rb
+    lib/agent/sessions/round_trip.rb
     lib/agent/sessions/session.rb
     lib/agent/sessions/sqlite.rb
     lib/agent/sessions/store.rb
+    lib/agent/sessions/tool_call.rb
     lib/agent/sessions/unknown_agent.rb
     lib/agent/sessions/unreadable_store.rb
     lib/agent/sessions/unsupported_format.rb

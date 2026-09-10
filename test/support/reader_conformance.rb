@@ -133,4 +133,32 @@ module ReaderConformance
   def count_tree_messages(nodes)
     nodes.sum { |node| 1 + count_tree_messages(node.children) }
   end
+
+  # C9: round_trips must never lose or duplicate a message — a reader that
+  # forgets to override round_trip_id_for still owes a correct answer, the
+  # base class's one-per-message fallback, not a broken one. Comparing by
+  # both size and text catches a reader that drops a message (size differs)
+  # and one that duplicates a message into two groups (text differs even at
+  # equal size).
+  def test_conformance_round_trips_group_without_losing_a_message
+    conformance_hello do |reader|
+      round_trips = reader.round_trips
+      assert_kind_of Array, round_trips
+      round_trips.each { |round_trip| assert_kind_of Agent::Sessions::RoundTrip, round_trip }
+      assert_includes [true, false], reader.round_trips_recorded?
+
+      flattened = round_trips.flat_map(&:messages)
+      assert_equal reader.messages.size, flattened.size
+      assert_equal reader.messages.map(&:text), flattened.map(&:text)
+
+      assert_equal (1..round_trips.size).to_a, round_trips.map(&:index)
+      round_trips.each do |round_trip|
+        usage = round_trip.usage
+        assert usage.nil? || usage.is_a?(Agent::Sessions::Usage),
+               "round trip usage must be an Agent::Sessions::Usage or nil, got #{usage.class}"
+      end
+
+      assert_kind_of Enumerator, reader.each_round_trip
+    end
+  end
 end

@@ -15,11 +15,12 @@ module Agent
           # been inference. A reference implementation has to be falsifiable.
           class Codex < Base
             # Known, and deliberately not messages: the session header, per-turn
-            # configuration, and two state records Codex added in July 2026. Silence
-            # here is a judgement, not an oversight — these are not conversation, and
-            # warning about them would train a caller to ignore warnings.
+            # configuration, state records, and cumulative token accounting.
+            # Silence here is a judgement, not an oversight —
+            # these are not conversation, and warning about them would train a
+            # caller to ignore warnings.
             NON_MESSAGE_TYPES = %w[session_meta turn_context world_state
-                                   inter_agent_communication_metadata].freeze
+                                   inter_agent_communication_metadata token_usage_record].freeze
 
             # "developer" is what Codex writes where the normalized vocabulary says
             # :system. It is 101 of 292 role-bearing records in the sample, so this is
@@ -60,11 +61,12 @@ module Agent
             CALL_OUTPUTS = %w[output tools].freeze
 
             # Session totals. Codex writes no usage on its messages; it writes
-            # token_count event records whose info.total_token_usage is a RUNNING
-            # TOTAL — verified against a real rollout on this machine (2026-08-24):
+            # token_count events with info.total_token_usage, or token_usage_record
+            # records with thread_token_usage (observed 2026-09-10). Both hold
+            # cumulative totals. The legacy format was verified on 2026-08-24:
             # consecutive records report total 33,751 then 69,135 while their
-            # last_token_usage differ, so the last record is the session and summing
-            # would multiply-count every earlier turn.
+            # last_token_usage differ, so the latest usable record is the session
+            # and summing would multiply-count every earlier turn.
             #
             # Two normalizations, both from that same file:
             #
@@ -79,25 +81,12 @@ module Agent
             #   any bucket it landed in would be double-counted by a caller summing
             #   buckets.
             def usage
-              info = nil
+              mapped = nil
               each_record do |record, _line_number|
-                next unless record["type"] == "event_msg"
-
-                candidate = record.dig("payload", "info", "total_token_usage")
-                info = candidate if record.dig("payload", "type") == "token_count" && candidate.is_a?(Hash)
+                candidate = cumulative_usage(record)
+                mapped = candidate if candidate
               end
-              return nil unless info
-
-              input = count_from(info["input_tokens"])
-              cached = count_from(info["cached_input_tokens"])
-              mapped = Usage.new(input: input && cached ? [input - cached, 0].max : input,
-                                 output: count_from(info["output_tokens"]),
-                                 cache_read: cached,
-                                 cache_creation: count_from(info["cache_write_input_tokens"]),
-                                 reasoning: count_from(info["reasoning_output_tokens"]))
-              # Same rule as Claude's usage_from: a token_count record whose every
-              # field failed the count check answers nil, not an all-nil Usage.
-              mapped.to_h.each_value.any? ? mapped : nil
+              mapped
             end
 
             private
@@ -198,7 +187,31 @@ module Agent
             def event_message(record)
               return nil unless include_events
 
-              build(record, :system, [Part.new(type: :unknown, text: record.dig("payload", "type"))])
+              payload = record["payload"]
+              type = payload.is_a?(Hash) ? payload["type"] : nil
+              build(record, :system, [Part.new(type: :unknown, text: type)])
+            end
+
+            def cumulative_usage(record)
+              source = case record["type"]
+                       when "event_msg"
+                         payload = record["payload"]
+                         info = payload["info"] if payload.is_a?(Hash) && payload["type"] == "token_count"
+                         info["total_token_usage"] if info.is_a?(Hash)
+                       when "token_usage_record"
+                         payload = record["payload"]
+                         payload["thread_token_usage"] if payload.is_a?(Hash)
+                       end
+              return unless source.is_a?(Hash)
+
+              input = count_from(source["input_tokens"])
+              cached = count_from(source["cached_input_tokens"])
+              result = Usage.new(input: input && cached ? [input - cached, 0].max : input,
+                                 output: count_from(source["output_tokens"]),
+                                 cache_read: cached,
+                                 cache_creation: count_from(source["cache_write_input_tokens"]),
+                                 reasoning: count_from(source["reasoning_output_tokens"]))
+              result if result.to_h.each_value.any?
             end
 
             def unknown_message(record)

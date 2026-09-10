@@ -1,3 +1,8 @@
+## 0.4.1 (2026-09-10)
+
+- Recognize Codex `token_usage_record` accounting metadata without adding conversation messages, round trips, or unknown-record warnings, including with `include_events: true`.
+- Read Codex session usage from the latest usable cumulative totals in file order across legacy `token_count` events and new `thread_token_usage` records, without double-counting. Malformed or empty totals preserve earlier valid usage; existing token normalization and missing-value semantics are retained.
+
 ## 0.4.0 (2026-09-10)
 
 - Round-trip grouping in every reader: `RoundTrip` (`index`, `messages`, `usage`, `recorded`, plus `parts`, `calls`, `roles`), `reader.each_round_trip` (streams), `reader.round_trips` (eager), `reader.round_trips_recorded?`

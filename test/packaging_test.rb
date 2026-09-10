@@ -80,7 +80,7 @@ class PackagingTest < Minitest::Test
     spec = specification
 
     assert_equal "agent_sessions", spec.name
-    assert_equal "0.4.0", spec.version.to_s
+    assert_equal "0.4.1", spec.version.to_s
     assert_equal "Locate, verify, and read AI coding agent session logs", spec.summary
     assert_equal "MIT", spec.license
     assert_equal "https://github.com/lucianghinda/agent_sessions", spec.homepage
@@ -97,7 +97,7 @@ class PackagingTest < Minitest::Test
   end
 
   def test_current_release_is_documented
-    assert_includes File.read(File.expand_path("../CHANGELOG.md", __dir__)), "## 0.4.0 (2026-09-10)"
+    assert_includes File.read(File.expand_path("../CHANGELOG.md", __dir__)), "## 0.4.1 (2026-09-10)"
   end
 
   def test_release_artifacts_are_ignored
@@ -191,7 +191,7 @@ class PackagingTest < Minitest::Test
       stdout, stderr, status = run_isolated_cli(gem_home, "version")
 
       assert status.success?, "expected installed CLI to run, stderr: #{stderr.inspect}, stdout: #{stdout.inspect}"
-      assert_equal "0.4.0\n", stdout
+      assert_equal "0.4.1\n", stdout
       assert_empty stderr
     end
   end

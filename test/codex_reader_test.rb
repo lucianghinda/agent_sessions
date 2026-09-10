@@ -282,6 +282,171 @@ class CodexReaderTest < Minitest::Test
     with_session([user_message("hi"), event_msg("task_started")]) { |reader| assert_nil reader.usage }
   end
 
+  def test_token_usage_records_are_accounting_metadata
+    with_session([assistant_message("hi"), token_usage_record]) do |reader|
+      assert_equal ["hi"], reader.messages.map(&:text)
+      assert_equal 1, reader.round_trips.size
+      assert_empty reader.warnings
+    end
+  end
+
+  def test_token_usage_records_are_skipped_when_events_are_included
+    with_session([assistant_message("hi"), token_usage_record], include_events: true) do |reader|
+      assert_equal ["hi"], reader.messages.map(&:text)
+      round_trip = reader.round_trips.first
+      assert_equal 1, reader.round_trips.size
+      refute round_trip.recorded
+      assert_empty reader.warnings
+    end
+  end
+
+  def test_accounting_record_preserves_tool_order_and_call_id
+    records = [tool_call("shell", "call_1", '{"command":"ls"}'), token_usage_record,
+               tool_output("call_1", "done")]
+    with_session(records) do |reader|
+      assert_equal %i[tool_use tool_result], reader.messages.map { |m| m.parts.first.type }
+      assert_equal ["call_1", "call_1"], reader.messages.map { |m| m.parts.first.call_id }
+      assert_empty reader.warnings
+    end
+  end
+
+  def test_usage_reads_new_token_usage_records
+    with_session([token_usage_record(input: 180, cached: 90, output: 12, reasoning: 4)]) do |reader|
+      usage = reader.usage
+      refute_nil usage
+      assert_equal [90, 90, 12, 4], usage_values(usage)
+    end
+  end
+
+  def test_usage_uses_the_latest_valid_cumulative_record_across_formats
+    records = [token_count(input: 100, cached: 40, output: 5, reasoning: 2),
+               token_usage_record(input: 180, cached: 90, output: 12, reasoning: 4),
+               token_count(input: 250, cached: 120, output: 18, reasoning: 6)]
+    with_session(records) do |reader|
+      usage = reader.usage
+      refute_nil usage
+      assert_equal [130, 120, 18, 6], usage_values(usage)
+    end
+  end
+
+  def test_usage_accepts_a_new_format_record_as_the_final_valid_total
+    records = [token_count(input: 100, cached: 40, output: 5, reasoning: 2),
+               token_usage_record(input: 180, cached: 90, output: 12, reasoning: 4)]
+    with_session(records) do |reader|
+      usage = reader.usage
+      refute_nil usage
+      assert_equal [90, 90, 12, 4], usage_values(usage)
+    end
+  end
+
+  def test_usage_does_not_double_count_repeated_cumulative_totals
+    records = [token_usage_record(input: 180, cached: 90, output: 12, reasoning: 4),
+               token_usage_record(input: 180, cached: 90, output: 12, reasoning: 4)]
+    with_session(records) do |reader|
+      usage = reader.usage
+      refute_nil usage
+      assert_equal [90, 90, 12, 4], usage_values(usage)
+    end
+  end
+
+  def test_usage_ignores_per_response_and_turn_totals
+    record = token_usage_record(input: 180, cached: 90, output: 12, reasoning: 4)
+    record[:payload].delete(:thread_token_usage)
+    record[:payload][:usage] = { input_tokens: 999, cached_input_tokens: 999,
+                                 output_tokens: 999, reasoning_output_tokens: 999 }
+    record[:payload][:turn_token_usage] = record[:payload][:usage]
+    with_session([record]) { |reader| assert_nil reader.usage }
+  end
+
+  def test_malformed_accounting_records_do_not_warn_or_crash
+    malformed = [
+      { type: "token_usage_record", timestamp: STAMP, payload: nil },
+      { type: "token_usage_record", timestamp: STAMP, payload: [] },
+      { type: "token_usage_record", timestamp: STAMP, payload: "not a hash" },
+      { type: "token_usage_record", timestamp: STAMP },
+      { type: "token_usage_record", timestamp: STAMP, payload: { thread_token_usage: nil } },
+      { type: "token_usage_record", timestamp: STAMP, payload: { thread_token_usage: [] } },
+      { type: "token_usage_record", timestamp: STAMP,
+        payload: { thread_token_usage: { total_tokens: 180 } } },
+      { type: "token_usage_record", timestamp: STAMP, payload: { thread_token_usage: { input_tokens: "180" } } },
+      { type: "event_msg", timestamp: STAMP, payload: nil },
+      { type: "event_msg", timestamp: STAMP, payload: [] },
+      { type: "event_msg", timestamp: STAMP, payload: "not a hash" },
+      { type: "event_msg", timestamp: STAMP, payload: { type: "token_count", info: nil } },
+      { type: "event_msg", timestamp: STAMP, payload: { type: "token_count", info: [] } },
+      { type: "event_msg", timestamp: STAMP, payload: { type: "token_count", info: "not a hash" } },
+      { type: "event_msg", timestamp: STAMP, payload: { type: "token_count", info: { total_token_usage: nil } } }
+    ]
+    with_session(malformed) do |reader|
+      assert_nil reader.usage
+      assert_empty reader.warnings
+      assert_empty reader.messages
+    end
+  end
+
+  def test_malformed_legacy_accounting_does_not_crash_when_events_are_included
+    records = [{ type: "event_msg", timestamp: STAMP, payload: nil },
+               { type: "event_msg", timestamp: STAMP, payload: [] },
+               { type: "event_msg", timestamp: STAMP, payload: { type: "token_count", info: [] } }]
+    with_session(records, include_events: true) do |reader|
+      assert_equal 3, reader.messages.size
+      assert_empty reader.warnings
+      assert_nil reader.usage
+    end
+  end
+
+  def test_new_usage_normalizes_cache_buckets_and_preserves_missing_dimensions
+    record = token_usage_record(input: nil, cached: 4, output: nil, reasoning: nil, cache_write: 2)
+    with_session([record]) do |reader|
+      usage = reader.usage
+      refute_nil usage
+      assert_nil usage.input
+      assert_equal 4, usage.cache_read
+      assert_equal 2, usage.cache_creation
+      assert_nil usage.output
+      assert_nil usage.reasoning
+    end
+  end
+
+  def test_invalid_trailing_totals_do_not_erase_earlier_valid_totals
+    with_session([token_usage_record, token_usage_record(input: "bad", cached: nil, output: [], reasoning: {}, cache_write: nil)]) do |reader|
+      usage = reader.usage
+      refute_nil usage
+      assert_equal [90, 90, 12, 4], usage_values(usage)
+    end
+  end
+
+  def test_invalid_trailing_legacy_totals_do_not_erase_earlier_valid_totals
+    invalid = { type: "event_msg", timestamp: STAMP,
+                payload: { type: "token_count", info: { total_token_usage: { output_tokens: "bad" } } } }
+    with_session([token_count(input: 180, cached: 90, output: 12, reasoning: 4), invalid]) do |reader|
+      usage = reader.usage
+      refute_nil usage
+      assert_equal [90, 90, 12, 4], usage_values(usage)
+    end
+  end
+
+  def test_new_cumulative_totals_clamp_input_and_preserve_missing_dimensions
+    records = [token_usage_record(input: 100, cached: 40, output: 12, reasoning: 4),
+               token_usage_record(input: 3, cached: 5, output: nil, reasoning: nil, cache_write: nil)]
+    with_session(records) do |reader|
+      usage = reader.usage
+      refute_nil usage
+      assert_equal 0, usage.input
+      assert_equal 5, usage.cache_read
+      assert_nil usage.output
+      assert_nil usage.reasoning
+    end
+  end
+
+  def test_an_unknown_top_level_record_still_warns_and_becomes_unknown
+    record = { type: "future_accounting_record", timestamp: STAMP, payload: {} }
+    with_session([record]) do |reader|
+      assert_equal :unknown, reader.messages.first.role
+      assert(reader.warnings.any? { |warning| warning.include?("future_accounting_record") })
+    end
+  end
+
   # Codex writes no usage on the messages themselves — the totals live in
   # token_count event records — so a message-level nil is the format speaking,
   # not this reader failing to look.
@@ -373,6 +538,19 @@ class CodexReaderTest < Minitest::Test
                    reasoning_output_tokens: reasoning,
                    total_tokens: input + output
                  }, model_context_window: 258_400 } } }
+  end
+
+  def token_usage_record(input: 180, cached: 90, output: 12, reasoning: 4, cache_write: 0)
+    { type: "token_usage_record", timestamp: STAMP,
+      payload: { thread_token_usage: {
+        input_tokens: input, cached_input_tokens: cached,
+        cache_write_input_tokens: cache_write, output_tokens: output,
+        reasoning_output_tokens: reasoning, total_tokens: input.is_a?(Integer) ? input + output.to_i : nil
+      }, usage: {}, turn_token_usage: {} } }
+  end
+
+  def usage_values(usage)
+    [usage.input, usage.cache_read, usage.output, usage.reasoning]
   end
 
   def compacted(texts)

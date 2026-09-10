@@ -39,8 +39,8 @@ caller must learn to ignore is worse than no warning.
 
 ### `NON_MESSAGE_TYPES` <a id="constant-NON_MESSAGE_TYPES"></a> <a id="NON_MESSAGE_TYPES-constant"></a>
 Known, and deliberately not messages: the session header, per-turn
-configuration, and two state records Codex added in July 2026. Silence here is
-a judgement, not an oversight — these are not conversation, and warning about
+configuration, state records, and cumulative token accounting. Silence here is
+a judgement, not an oversight —these are not conversation, and warning about
 them would train a caller to ignore warnings.
 
 ### `ROLES` <a id="constant-ROLES"></a> <a id="ROLES-constant"></a>
@@ -61,11 +61,11 @@ Not documented.
 ## Public Instance Methods
 ### `usage()` <a id="method-i-usage"></a> <a id="usage-instance_method"></a>
 Session totals. Codex writes no usage on its messages; it writes token_count
-event records whose info.total_token_usage is a RUNNING TOTAL — verified
-against a real rollout on this machine (2026-08-24): consecutive records
-report total 33,751 then 69,135 while their last_token_usage differ, so the
-last record is the session and summing would multiply-count every earlier
-turn.
+events with info.total_token_usage, or token_usage_record records with
+thread_token_usage (observed 2026-09-10). Both hold cumulative totals. The
+legacy format was verified on 2026-08-24: consecutive records report total
+33,751 then 69,135 while their last_token_usage differ, so the latest usable
+record is the session and summing would multiply-count every earlier turn.
 
 Two normalizations, both from that same file:
 

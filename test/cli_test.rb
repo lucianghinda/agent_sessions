@@ -1210,4 +1210,79 @@ class CLITest < Minitest::Test
     Agent::Sessions.registry.delete(:nine)
     Agent::Sessions.registry.delete(:one)
   end
+
+  def test_show_prints_the_loop_view_for_one_session
+    with_home do |home, env|
+      claude_fixture(home, id: "aa11")
+      status, out, = run_cli("show", "claude:aa11", env: env)
+      assert_equal 0, status
+      assert_includes out, "session claude:aa11"
+      assert_includes out, "ending:"
+    end
+  end
+
+  # A bare id is ambiguous the moment two agents share one — Session#uid is
+  # the collision-free key this gem already offers, so the error must point
+  # the caller at the agent:id form rather than guessing which agent meant.
+  # A trailing colon and a leading colon are both "not a uid", and neither may
+  # echo the broken argument back into the example — "claude:" must not be
+  # answered with "for example claude:claude:", which reads as a second mistake.
+  def test_show_refuses_a_half_written_uid_without_echoing_it_into_the_example
+    with_home do |_home, env|
+      ["claude:", ":abc"].each do |argument|
+        status, _, err = run_cli("show", argument, env: env)
+        assert_equal 1, status, "#{argument.inspect} is not a session uid"
+        assert_includes err, "agent:id form"
+        assert_includes err, "claude:018f2a7c"
+        refute_includes err, "for example claude:#{argument}"
+      end
+    end
+  end
+
+  def test_show_refuses_a_bare_id_and_names_the_form_it_wants
+    with_home do |home, env|
+      claude_fixture(home, id: "aa11")
+      status, _, err = run_cli("show", "aa11", env: env)
+      assert_equal 1, status
+      assert_includes err, "agent:id"
+    end
+  end
+
+  def test_show_renders_markdown_and_json_on_request
+    with_home do |home, env|
+      claude_fixture(home, id: "aa11")
+      _, md_out, = run_cli("show", "claude:aa11", "--format", "md", env: env)
+      assert md_out.start_with?("#")
+
+      _, json_out, = run_cli("show", "claude:aa11", "--format", "json", env: env)
+      payload = JSON.parse(json_out)
+      assert_equal true, payload.dig("ending", "inferred")
+    end
+  end
+
+  def test_show_rejects_an_unknown_format
+    with_home do |home, env|
+      claude_fixture(home, id: "aa11")
+      status, _, err = run_cli("show", "claude:aa11", "--format", "yaml", env: env)
+      assert_equal 1, status
+      assert_includes err, "ascii"
+      assert_includes err, "md"
+      assert_includes err, "json"
+    end
+  end
+
+  def test_show_reports_a_session_it_cannot_find
+    with_home do |_home, env|
+      status, _, err = run_cli("show", "claude:nope", env: env)
+      assert_equal 1, status
+      assert_includes err, "nope"
+    end
+  end
+
+  def test_help_lists_show
+    with_home do |_home, env|
+      _, out, = run_cli("help", env: env)
+      assert_includes out, "show"
+    end
+  end
 end
